@@ -5,14 +5,14 @@ import json
 import sys
 
 from rag.ingest import ingest
-from rag.retriever import _bm25_bundle, format_hits, retrieve
+from rag.retriever import clear_retrieve_cache, format_hits, retrieve
 from scagent.config import load_config
 from scagent.skills_loader import list_skills, load_skill_text
 
 
 def cmd_ingest(_args: argparse.Namespace) -> int:
-    path = ingest()
-    _bm25_bundle.cache_clear()
+    path = ingest(force=True)
+    clear_retrieve_cache()
     print(f"indexed → {path}")
     return 0
 
@@ -35,6 +35,17 @@ def cmd_show_skill(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_memory(_args: argparse.Namespace) -> int:
+    from agents.memory import dump_memory_yaml, load_memory
+
+    mem = load_memory()
+    if not mem:
+        print("尚无 memory.yaml（先跑 scagent run）")
+        return 1
+    print(dump_memory_yaml(mem).rstrip())
+    return 0
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     from scagent.demo import DEFAULT_PATH, write_tiny_h5ad
 
@@ -48,7 +59,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     cfg = load_config()
     ingest()
-    _bm25_bundle.cache_clear()
+    clear_retrieve_cache()
     mode = "full"
     if args.qc_only:
         mode = "qc_only"
@@ -71,16 +82,26 @@ def cmd_run(args: argparse.Namespace) -> int:
         integrator=args.integrator,
         imputation=args.impute,
         qc_method=args.qc_method,
+        remove_doublets=True if args.remove_doublets else None,
+        ambient=args.ambient,
+        condition_key=args.condition_key,
+        thread_id=args.thread_id,
+        resume=args.resume,
     )
     print(state.get("plan", {}).get("narrative", ""))
-    print("\n--- status ---", state.get("status"))
+    print("\n--- status ---", state.get("status"), "thread_id=", state.get("thread_id"))
     print("\n--- skills ---")
     print(", ".join(state.get("skills_used") or []))
+    from agents.reviewer import format_review_card
+
+    print("\n--- Reviewer ---")
+    print(format_review_card(state.get("review_publication"), args.report_lang).rstrip())
     print("\n--- review QC ---")
     print(json.dumps(state.get("review_qc"), ensure_ascii=False, indent=2))
     print("\n--- review downstream ---")
     print(json.dumps(state.get("review_downstream"), ensure_ascii=False, indent=2))
     print("\n报告: outputs/report.md")
+    print("provenance: outputs/memory.yaml")
     print("脚本: workspace/qc_preprocess.py  workspace/cluster_annotate.py  workspace/reproducible_script.py")
     if state.get("status") == "awaiting_qc_confirmation":
         print("QC 已暂停。检查 workspace/ 后用 --annotate-only --yes 继续。")
@@ -117,7 +138,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--path", default=None)
     s.set_defaults(func=cmd_demo)
 
-    s = sub.add_parser("run", help="两阶段图：QC 执行审查 → 聚类注释审查 → 报告")
+    s = sub.add_parser("memory", help="打印分析 provenance（步骤与参数，不是聊天）")
+    s.set_defaults(func=cmd_memory)
+
+    s = sub.add_parser("run", help="Planner → Executor → Reviewer → Publication Report")
     s.add_argument("query", help="分析任务，例如：对 PBMC 做标准注释")
     s.add_argument("--data", default="", help="h5ad / 10x 目录 / Seurat .rds")
     s.add_argument("--tissue", default="default")
@@ -132,7 +156,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--batch-key", default=None)
     s.add_argument("--integrator", choices=["auto", "none", "harmony", "scvi", "cca"], default=None, help="批次校正模块，默认读 config.modules.batch")
     s.add_argument("--impute", choices=["none", "magic", "alra"], default=None, help="Dropout 插补，默认读 config.modules.imputation")
+    s.add_argument("--ambient", choices=["auto", "none", "soupx", "decontx"], default=None, help="Ambient RNA 去除，默认读 config.modules.ambient")
+    s.add_argument("--remove-doublets", action="store_true", help="按 Scrublet predicted_doublet 过滤细胞")
+    s.add_argument("--condition-key", default=None, help="组间比较的 obs 列名；出现时走 pseudobulk DE")
     s.add_argument("--qc-method", choices=["mad", "percentile", "hybrid"], default=None)
+    s.add_argument("--thread-id", default=None, help="LangGraph checkpoint thread_id；崩溃后用同一 id --resume")
+    s.add_argument("--resume", action="store_true", help="从上次 checkpoint 续跑（默认同 --thread-id 或 .cache/last_thread_id）")
+    s.add_argument("--from-checkpoint", action="store_true", dest="resume", help="同 --resume")
     s.add_argument("--markers", default=None, help="自定义 marker CSV/JSON（可含 lineage 列）")
     s.add_argument("--report-lang", choices=["zh", "en", "both"], default="zh")
     s.set_defaults(func=cmd_run)

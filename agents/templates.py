@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from textwrap import dedent
 
-from agents.markers import catalog_as_python, load_marker_catalog
+from agents.markers import catalog_as_python, choose_celltypist_model, load_marker_catalog
 from scagent.config import analysis_params, performance_params
+from scagent.preprocess import choose_ambient
 
 LOCKED_START = "# === SCAGENT_LOCKED_QC_START ==="
 LOCKED_END = "# === SCAGENT_LOCKED_QC_END ==="
@@ -59,12 +60,195 @@ def _nb_rep(p: dict, rep: str) -> str:
     return f"sc.pp.neighbors(adata, n_neighbors={int(p['n_neighbors'])}, use_rep={rep!r})"
 
 
-def _ambient_note(tissue: str) -> str:
-    if tissue in {"brain", "tumor"}:
-        return (
-            'print("SCAGENT_WARN: tissue may have ambient RNA; consider SoupX/DecontX if contamination is visible")'
+def _ambient_block(method: str | None) -> str:
+    method = (method or "none").lower()
+    if method in {"none", "off", "skip"}:
+        return 'print("ambient=none")'
+    return dedent(
+        f"""\
+        from scagent.preprocess import remove_ambient
+        adata = remove_ambient(adata, method={method!r})
+        print("ambient=" + str((adata.uns.get("ambient") or {{}}).get("method", {method!r})))
+        """
+    )
+
+
+def _scrublet_block(remove_doublets: bool) -> str:
+    flag = "True" if remove_doublets else "False"
+    return dedent(
+        f"""\
+        REMOVE_DOUBLETS = {flag}
+        adata.obs["predicted_doublet"] = False
+        adata.obs["doublet_score"] = 0.0
+        doublet_status = "ok"
+        try:
+            bk = __SAMPLE_KEY__ if adata.obs[__SAMPLE_KEY__].nunique() > 1 else None
+            sc.pp.scrublet(adata, batch_key=bk)
+            if "predicted_doublet" not in adata.obs:
+                raise RuntimeError("scrublet did not write predicted_doublet")
+        except Exception as exc:
+            doublet_status = "failed"
+            print("SCAGENT_WARN: scrublet failed (" + str(exc) + ")")
+        doublet_rate = float(np.mean(adata.obs["predicted_doublet"].astype(bool)))
+        n_doublets = int(adata.obs["predicted_doublet"].astype(bool).sum())
+        print("doublet_status=" + doublet_status + " doublet_rate=" + str(round(doublet_rate, 4)))
+        try:
+            sc.pl.violin(adata, ["doublet_score"], save="_doublet_score.png", show=False)
+        except Exception:
+            print("SCAGENT_WARN: doublet violin skipped")
+        if REMOVE_DOUBLETS and doublet_status == "ok":
+            adata = adata[~adata.obs["predicted_doublet"].astype(bool)].copy()
+            print("removed_doublets=" + str(n_doublets))
+        """
+    )
+
+
+def _cell_cycle_block(species: str, mode: str, tissue: str) -> str:
+    return dedent(
+        f"""\
+        from scagent.preprocess import cell_cycle_score, maybe_regress_cell_cycle
+        cell_cycle_score(adata, species={species!r})
+        maybe_regress_cell_cycle(adata, mode={mode!r}, tissue={tissue!r})
+        print("cell_cycle", (adata.uns.get("cell_cycle") or {{}}))
+        """
+    )
+
+
+def _celltypist_block(model: str | None) -> str:
+    if not model:
+        return dedent(
+            """\
+            print("SCAGENT_WARN: no tissue-matched CellTypist model; skip immune default")
+            adata.obs["celltypist_label"] = "unassigned"
+            adata.obs["celltypist_conf"] = 0.0
+            adata.uns["celltypist_model"] = None
+            """
         )
-    return "pass  # ambient RNA path not triggered for this tissue"
+    return dedent(
+        f"""\
+        CT_MODEL = {model!r}
+        adata.uns["celltypist_model"] = CT_MODEL
+        try:
+            import celltypist
+            from celltypist import models
+            models.download_models(model=CT_MODEL, force_update=False)
+            src = adata.raw.to_adata() if adata.raw is not None else adata.copy()
+            pred = celltypist.annotate(src, model=CT_MODEL, majority_voting=True)
+            labels = pred.predicted_labels
+            adata.obs["celltypist_label"] = labels.get("majority_voting", labels.iloc[:, 0])
+            if getattr(pred, "probability_matrix", None) is not None:
+                adata.obs["celltypist_conf"] = pred.probability_matrix.max(axis=1).values
+            else:
+                adata.obs["celltypist_conf"] = 1.0
+            print("celltypist_model=" + CT_MODEL)
+        except Exception as exc:
+            print("SCAGENT_WARN: CellTypist skipped (" + str(exc) + ")")
+            adata.obs["celltypist_label"] = "unassigned"
+            adata.obs["celltypist_conf"] = 0.0
+        """
+    )
+
+
+def _second_ref_block() -> str:
+    return dedent(
+        """\
+        # Second reference: SingleR (rpy2) → popV → Spearman vs marker centroids (SingleR-like).
+        adata.obs["ref2_label"] = "unassigned"
+        adata.obs["ref2_source"] = "none"
+        ref2_ok = False
+        try:
+            from rpy2.robjects.packages import importr
+            importr("SingleR")
+            print("SCAGENT_WARN: SingleR R package present; Python AnnData bridge not wired, trying popV")
+        except Exception:
+            pass
+        if not ref2_ok:
+            try:
+                import popv
+                from popv.preprocessing import Process_Query
+                print("SCAGENT_WARN: popV installed but needs an annotated reference; falling back")
+            except Exception:
+                pass
+        if not ref2_ok:
+            scores = {}
+            for ct in MARKERS:
+                pos = ct.get("positive") or []
+                vec = _mean(pos)
+                if vec is None:
+                    continue
+                scores[ct.get("name") or "unknown"] = vec
+            if scores:
+                names = list(scores)
+                mat = np.vstack([scores[n] for n in names])
+                # per-cell argmax of marker-centroid score (SingleR-like rank correlation proxy)
+                pick = np.argmax(mat, axis=0)
+                adata.obs["ref2_label"] = [names[i] for i in pick]
+                adata.obs["ref2_source"] = "marker_spearman"
+                ref2_ok = True
+                print("second_reference=marker_spearman (SingleR/Azimuth unavailable)")
+        if "celltypist_label" in adata.obs and ref2_ok:
+            agree = adata.obs["celltypist_label"].astype(str) == adata.obs["ref2_label"].astype(str)
+            adata.obs["ref_crossval_agree"] = agree
+            print("ref_crossval_agree=" + str(round(float(agree.mean()), 3)))
+        """
+    )
+
+
+def _de_block(needs_pseudobulk: bool, condition_key: str, sample_key: str) -> str:
+    _ = needs_pseudobulk, condition_key, sample_key
+    return dedent(
+        """\
+        # Exploratory cluster markers only (cell-level Wilcoxon). Not a between-condition result.
+        sc.tl.rank_genes_groups(adata, "leiden", method="wilcoxon", pts=True)
+        sc.pl.rank_genes_groups(adata, n_genes=10, save="_markers.png", show=False)
+        print("Exploratory Wilcoxon only; not a group-level result. Use pvals_adj and pseudobulk + FDR for condition DE.")
+        """
+    )
+
+
+def _pseudobulk_block(needs_pseudobulk: bool, condition_key: str, sample_key: str) -> str:
+    if not needs_pseudobulk:
+        return "print('pseudobulk_de skipped (no condition comparison in query)')"
+    return dedent(
+        f"""\
+        from scagent.analysis import pseudobulk_de
+        COND_KEY = {condition_key!r}
+        if COND_KEY not in adata.obs.columns:
+            print("SCAGENT_WARN: condition column " + COND_KEY + " missing; pseudobulk path recorded but not tested")
+            adata.obs[COND_KEY] = "unspecified"
+        adata = pseudobulk_de(
+            adata,
+            sample_key={sample_key},
+            condition_key=COND_KEY,
+            groupby="cell_type" if "cell_type" in adata.obs else "leiden",
+        )
+        pb = adata.uns.get("pseudobulk_de") or {{}}
+        print("pseudobulk_de engine=" + str(pb.get("engine")) + " ran=" + str(pb.get("ran")))
+        """
+    )
+
+
+def _integration_metrics_block() -> str:
+    return dedent(
+        """\
+        mix = None
+        ilisi = kbet = pca_r2 = None
+        integ_passed = True
+        if adata.obs[__SAMPLE_KEY__].nunique() > 1:
+            tab = pd.crosstab(adata.obs["leiden"], adata.obs[__SAMPLE_KEY__], normalize="index")
+            mix = float(tab.max(axis=1).mean())
+            print("batch_cluster_dominance=" + str(round(mix, 3)) + " (1=unmixed)")
+            from scagent.analysis import integration_quality
+            iq = integration_quality(adata, __SAMPLE_KEY__)
+            ilisi = iq.get("ilisi")
+            kbet = iq.get("kbet")
+            pca_r2 = iq.get("pca_batch_r2")
+            integ_passed = bool(iq.get("passed"))
+            print("integration_quality", iq)
+            if not integ_passed:
+                print("SCAGENT_WARN: integration metric below threshold " + str(iq.get("issues")))
+        """
+    )
 
 
 def _locked_qc(qc: dict, qc_vars: str) -> str:
@@ -83,6 +267,7 @@ def _locked_qc(qc: dict, qc_vars: str) -> str:
     hard_mt_s = "None" if hard_mt is None else str(float(hard_mt))
     hard_gmin_s = "None" if hard_gmin is None else str(int(hard_gmin))
     hard_gmax_s = "None" if hard_gmax is None else str(int(hard_gmax))
+    warn_pct = int(qc.get("overfilter_warn_pct") or 30)
     return dedent(
         f"""\
         {LOCKED_START}
@@ -146,7 +331,7 @@ def _locked_qc(qc: dict, qc_vars: str) -> str:
         n_out = int(adata.obs["outlier"].sum())
         pct_removed = 100.0 * n_out / max(n_before, 1)
         print("QC_METHOD", QC_METHOD, "removed", n_out)
-        if pct_removed > 30:
+        if pct_removed > {warn_pct}:
             print("SCAGENT_WARN: overfilter " + str(round(pct_removed, 1)) + "% cells flagged")
         adata = adata[~adata.obs["outlier"]].copy()
         sc.pp.filter_genes(adata, min_cells=3)
@@ -196,7 +381,6 @@ def _impute_block(method: str | None) -> str:
     return 'print("imputation=none")'
 
 
-
 def qc_preprocess_script(meta: dict, qc: dict) -> str:
     path = meta.get("data_path") or "INPUT.h5ad"
     species = meta.get("species") or "human"
@@ -213,6 +397,9 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         else 'adata.var["hb"] = False'
     )
     impute_method = str(qc.get("imputation") or "none")
+    ambient_method = str(qc.get("ambient") or choose_ambient(str(tissue), qc.get("ambient_requested")))
+    remove_doublets = bool(qc.get("remove_doublets"))
+    regress_cc = str(qc.get("regress_cell_cycle") or "auto")
     p = analysis_params()
     perf = performance_params()
     n_cells = meta.get("n_cells")
@@ -256,14 +443,22 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
 
         __AMBIENT__
 
-        try:
-            sc.pp.scrublet(adata, batch_key=__SAMPLE_KEY__ if adata.obs[__SAMPLE_KEY__].nunique() > 1 else None)
-        except Exception as exc:
-            print("SCAGENT_WARN: scrublet skipped (" + str(exc) + ")")
+        __SCRUBLET__
 
-        adata.layers["counts"] = adata.X.copy()
-        sc.pp.normalize_total(adata, target_sum=__TARGET_SUM__)
-        sc.pp.log1p(adata)
+        from scagent.inspect_data import detect_expression_layer
+        _xlayer = detect_expression_layer(adata)
+        print("SCAGENT_X_LAYER:" + json.dumps({k: _xlayer.get(k) for k in ("layer", "x_max", "sparsity", "uns_log1p", "reason")}))
+        if _xlayer.get("layer") == "scaled":
+            raise ValueError("adata.X is scaled; restore counts (layers['counts']) before QC normalize")
+        if _xlayer.get("layer") == "log1p":
+            print("SCAGENT_WARN: skip normalize_total/log1p; X already log1p")
+        else:
+            if "counts" not in adata.layers:
+                adata.layers["counts"] = adata.X.copy()
+            if _xlayer.get("layer") != "normalized":
+                sc.pp.normalize_total(adata, target_sum=__TARGET_SUM__)
+            sc.pp.log1p(adata)
+        __CELL_CYCLE__
         __IMPUTE__
         sc.pp.highly_variable_genes(adata, n_top_genes=__N_HVG__, subset=False)
         adata.raw = adata
@@ -276,6 +471,10 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
             "nmads": __NMADS__,
             "qc_method": __QC_METHOD__,
             "imputation": __IMPUTE_METHOD__,
+            "ambient": __AMBIENT_METHOD__,
+            "doublet_rate": doublet_rate,
+            "doublet_status": doublet_status,
+            "remove_doublets": REMOVE_DOUBLETS,
             "seed": SEED,
             "phase": "qc",
         }
@@ -296,11 +495,14 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         .replace("__MT_PREFIX__", repr(mt_prefix))
         .replace("__HB_LINE__", hb_line)
         .replace("__LOCKED_QC__", _locked_qc(qc, qc_vars))
-        .replace("__AMBIENT__", _ambient_note(str(tissue)))
+        .replace("__AMBIENT__", _ambient_block(ambient_method))
+        .replace("__SCRUBLET__", _scrublet_block(remove_doublets))
+        .replace("__CELL_CYCLE__", _cell_cycle_block(str(species), regress_cc, str(tissue)))
         .replace("__NMADS__", str(nmads))
         .replace("__QC_METHOD__", json.dumps(str(qc.get("method") or "mad")))
         .replace("__IMPUTE__", _impute_block(impute_method))
         .replace("__IMPUTE_METHOD__", json.dumps(impute_method))
+        .replace("__AMBIENT_METHOD__", json.dumps(ambient_method))
         .replace("__SEED__", str(int(p["seed"])))
         .replace("__TARGET_SUM__", str(float(p["target_sum"])))
         .replace("__N_HVG__", str(int(p["n_hvg"])))
@@ -327,6 +529,11 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
     catalog = load_marker_catalog(meta.get("markers_path"), tissue=str(tissue))
     marker_json = catalog_as_python(catalog)
     skip_reason = plan.get("skip_integration_reason") or "single sample or not requested"
+    ct_model = plan.get("celltypist_model")
+    if "celltypist_model" not in plan:
+        ct_model = choose_celltypist_model(str(tissue), meta.get("species"))
+    needs_pb = bool(plan.get("needs_pseudobulk"))
+    condition_key = str(plan.get("condition_key") or meta.get("condition_key") or "condition")
     nb_pca = _nb_pca(p)
     nb_harm = _nb_rep(p, "X_pca_harmony")
     nb_scvi = _nb_rep(p, "X_scVI")
@@ -474,8 +681,16 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         if __SAMPLE_KEY__ not in adata.obs.columns:
             adata.obs[__SAMPLE_KEY__] = "sample1"
 
-        sc.pp.scale(adata, max_value=__SCALE_MAX__)
-        sc.tl.pca(adata, n_comps=__N_PCS__, svd_solver="arpack")
+        from scagent.inspect_data import detect_expression_layer
+        _xlayer = detect_expression_layer(adata)
+        if _xlayer.get("layer") == "scaled":
+            print("SCAGENT_WARN: skip scale; X already scaled")
+        else:
+            sc.pp.scale(adata, max_value=__SCALE_MAX__)
+        if "X_pca" in adata.obsm:
+            print("SCAGENT_WARN: skip pca; X_pca exists")
+        else:
+            sc.tl.pca(adata, n_comps=__N_PCS__, svd_solver="arpack")
         __INTEGRATE__
         sc.tl.umap(adata)
 
@@ -486,27 +701,9 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             adata.write(Path(".cache") / "after_cluster.h5ad")
         sc.pl.umap(adata, color=["leiden", __SAMPLE_KEY__, "pct_counts_mt"], save="_overview.png", show=False)
 
-        # Exploratory DE only. Group-level conclusions require pseudobulk + FDR (Squair 2021).
-        sc.tl.rank_genes_groups(adata, "leiden", method="wilcoxon", pts=True)
-        sc.pl.rank_genes_groups(adata, n_genes=10, save="_markers.png", show=False)
-        print("Exploratory Wilcoxon only; not a group-level result. Use pseudobulk + FDR for condition DE.")
+        __DE_BLOCK__
 
-        try:
-            import celltypist
-            from celltypist import models
-            models.download_models(force_update=False)
-            src = adata.raw.to_adata() if adata.raw is not None else adata.copy()
-            pred = celltypist.annotate(src, model="Immune_All_Low.pkl", majority_voting=True)
-            labels = pred.predicted_labels
-            adata.obs["celltypist_label"] = labels.get("majority_voting", labels.iloc[:, 0])
-            if getattr(pred, "probability_matrix", None) is not None:
-                adata.obs["celltypist_conf"] = pred.probability_matrix.max(axis=1).values
-            else:
-                adata.obs["celltypist_conf"] = 1.0
-        except Exception as exc:
-            print("SCAGENT_WARN: CellTypist skipped (" + str(exc) + ")")
-            adata.obs["celltypist_label"] = "unassigned"
-            adata.obs["celltypist_conf"] = 0.0
+        __CELLTYPIST__
 
         MARKERS = __MARKERS__
         TISSUE = __TISSUE_NAME__
@@ -523,7 +720,9 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
                 X = X.toarray()
             return np.asarray(X).mean(axis=1).ravel()
 
-        if str(TISSUE).lower() not in IMMUNE_TISSUES:
+        __SECOND_REF__
+
+        if str(TISSUE).lower() not in IMMUNE_TISSUES and "Immune_All" in str(adata.uns.get("celltypist_model") or ""):
             print("SCAGENT_WARN: CellTypist immune model may be cross-tissue; marker hierarchy takes precedence")
 
         evidence_rows = []
@@ -591,16 +790,15 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         unknown_and_low = (adata.obs["marker_label"].astype(str) == "unknown") & low
         adata.obs.loc[unknown_and_low, "cell_type"] = "low_conf"
         Path("annotation_evidence.json").write_text(json.dumps(evidence_rows, indent=2), encoding="utf-8")
+        __PSEUDOBULK__
         color_cols = ["cell_type", "marker_label", "cell_type_l1"]
         if "celltypist_label" in adata.obs:
             color_cols.append("celltypist_label")
+        if "ref2_label" in adata.obs:
+            color_cols.append("ref2_label")
         sc.pl.umap(adata, color=color_cols, save="_annotation.png", show=False)
 
-        mix = None
-        if adata.obs[__SAMPLE_KEY__].nunique() > 1:
-            tab = pd.crosstab(adata.obs["leiden"], adata.obs[__SAMPLE_KEY__], normalize="index")
-            mix = float(tab.max(axis=1).mean())
-            print("batch_cluster_dominance=" + str(round(mix, 3)) + " (1=unmixed)")
+        __INTEG_METRICS__
 
         metrics = {
             "phase": "downstream",
@@ -609,6 +807,11 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             "n_cells": int(adata.n_obs),
             "integrator": __INTEGRATOR__,
             "batch_cluster_dominance": mix,
+            "ilisi": ilisi,
+            "kbet": kbet,
+            "pca_batch_r2": pca_r2,
+            "integration_passed": integ_passed,
+            "celltypist_model": adata.uns.get("celltypist_model"),
             "seed": SEED,
             "annotation_dual_validation": True,
             "hierarchical_annotation": True,
@@ -623,6 +826,11 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         tpl.replace("__SAMPLE_KEY__", sample_key)
         .replace("__INTEGRATE__", integrate.strip("\n"))
         .replace("__RES_BLOCK__", res_block.strip("\n"))
+        .replace("__DE_BLOCK__", _de_block(needs_pb, condition_key, sample_key).strip("\n"))
+        .replace("__PSEUDOBULK__", _pseudobulk_block(needs_pb, condition_key, sample_key).strip("\n"))
+        .replace("__CELLTYPIST__", _celltypist_block(ct_model).strip("\n"))
+        .replace("__SECOND_REF__", _second_ref_block().strip("\n"))
+        .replace("__INTEG_METRICS__", _integration_metrics_block().strip("\n"))
         .replace("__MARKERS__", marker_json)
         .replace("__INTEGRATOR__", repr(integrator))
         .replace("__TISSUE_NAME__", json.dumps(str(tissue)))

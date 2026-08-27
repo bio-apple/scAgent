@@ -131,6 +131,37 @@ def invoke_llm(model, messages, cfg: dict | None = None):
     raise last  # pragma: no cover
 
 
+def invoke_json(system_prompt: str, user_text: str, cfg: dict | None = None) -> dict | None:
+    """LLM JSON object via response_format. None if no key or parse failure."""
+    import json
+    import re
+
+    llm = get_llm(cfg)
+    if llm is None:
+        return None
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    bound = llm
+    try:
+        bound = llm.bind(response_format={"type": "json_object"})
+    except Exception:
+        bound = llm
+    ai = invoke_llm(bound, [SystemMessage(content=system_prompt), HumanMessage(content=user_text)], cfg)
+    content = ai.content if isinstance(ai.content, str) else str(ai.content)
+    try:
+        data = json.loads(content)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", content, re.S)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group())
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
 def run_specialist(system_prompt: str, user_text: str, cfg: dict | None = None) -> str | None:
     """Bounded tool loop. Returns None if no API key (caller uses fallback)."""
     llm = get_llm(cfg)

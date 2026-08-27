@@ -94,3 +94,36 @@ def test_logging_timed():
     log = get_logger("test")
     with timed("unit.test", log):
         pass
+
+
+def test_cli_from_checkpoint_alias():
+    from scagent.cli import build_parser
+
+    p = build_parser()
+    assert p.parse_args(["run", "q", "--from-checkpoint"]).resume is True
+    assert p.parse_args(["run", "q", "--resume"]).resume is True
+    assert p.parse_args(["run", "q"]).resume is False
+    assert p.parse_args(["memory"]).func.__name__ == "cmd_memory"
+
+
+def test_writer_html_and_run_log(tmp_path):
+    from agents.writer import render_html, write_run_log
+
+    state = {
+        "user_query": "demo",
+        "report_lang": "zh",
+        "thread_id": "t1",
+        "metadata": {"species": "human", "tissue": "pbmc"},
+        "plan": {"integrator": None, "skills": [], "route": ["qc"]},
+        "review_qc": {"passed": True, "issues": [], "issue_records": []},
+        "artifacts": {"figure_captions": [{"path": "figures/violin.png", "kind": "violin", "caption": "qc"}]},
+    }
+    html = render_html(state)
+    assert "<!DOCTYPE html>" in html
+    assert "figures/violin.png" in html
+    write_run_log(state, tmp_path)
+    import json
+
+    log = json.loads((tmp_path / "run_log.json").read_text(encoding="utf-8"))
+    assert log["thread_id"] == "t1"
+    assert "issue_records" in log["review_qc"]

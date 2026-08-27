@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from agents.reviewer import format_review_card, publication_review
+
 
 CAPTION_EN = {
     "violin": "QC violin of n_genes / counts / pct_mt. Used to set MAD thresholds; not cell-type evidence.",
@@ -40,10 +42,16 @@ def _metrics_table(artifacts: dict, lang: str) -> str:
         ("nmads", "MAD n"),
         ("qc_method", "QC 方法" if lang != "en" else "QC method"),
         ("imputation", "插补" if lang != "en" else "imputation"),
+        ("ambient", "ambient RNA"),
+        ("doublet_rate", "双细胞比例" if lang != "en" else "doublet rate"),
         ("resolution", "Leiden resolution"),
         ("n_clusters", "簇数" if lang != "en" else "clusters"),
         ("integrator", "整合方法" if lang != "en" else "integrator"),
+        ("ilisi", "iLISI"),
+        ("kbet", "kBET"),
+        ("pca_batch_r2", "PCA 批次 R²"),
         ("batch_cluster_dominance", "cluster 内主导批次比例"),
+        ("celltypist_model", "CellTypist 模型"),
         ("seed", "seed"),
     ]
     rows = ["| 指标 | 值 |", "|---|---|"] if lang != "en" else ["| metric | value |", "|---|---|"]
@@ -92,6 +100,7 @@ def _one_lang(state: dict, lang: str) -> str:
         f"- integrator: {plan.get('integrator')}",
         f"- imputation: {plan.get('imputation') or qc.get('imputation')}",
         f"- qc method: {qc.get('method')}",
+        f"- mito note: {qc.get('pct_mt_note') or ('无' if zh else 'none')}",
         f"- risks: {'; '.join(plan.get('risks') or []) or ('无' if zh else 'none')}",
         "",
     ]
@@ -131,8 +140,9 @@ def _one_lang(state: dict, lang: str) -> str:
         "",
         f"## {'审查结论' if zh else 'Review'}",
         "",
-        _review_block(state.get("review_qc"), "QC"),
-        _review_block(state.get("review_downstream"), "Downstream" if not zh else "聚类/注释"),
+        format_review_card(state.get("review_publication") or publication_review(state), lang),
+        _review_block(state.get("review_qc"), "QC 代码/执行" if zh else "QC code/execution"),
+        _review_block(state.get("review_downstream"), "聚类/注释 代码/执行" if zh else "Downstream code/execution"),
         "",
         f"## {'图' if zh else 'Figures'}",
         "",
@@ -143,24 +153,45 @@ def _one_lang(state: dict, lang: str) -> str:
     ]
     warns = artifacts.get("warnings") or []
     lines.append("\n".join(f"- {w}" for w in warns) if warns else ("- 无" if zh else "- none"))
-    lines += [
-        "",
-        f"## {'局限与下一步' if zh else 'Limitations'}",
-        "",
-        "- 统计推断以生物学重复为单位；Wilcoxon 仅为探索。",
-        "- UMAP 是可视化。注释是分层证据。",
-        "- 未执行的步骤不得写成结果。",
-        "- HITL: `--interrupt` 后检查 QC，再用 `--annotate-only` 继续。",
-        "",
-    ]
-    if lang == "en":
-        lines[-5:] = [
+    if zh:
+        lines += [
+            "",
+            "## 局限与下一步",
+            "",
+            "- 统计推断以生物学重复为单位；Wilcoxon 仅为探索。",
+            "- UMAP 是可视化。注释是分层证据。",
+            "- 未执行的步骤不得写成结果。",
+            "- HITL: `--interrupt` 后检查 QC，再用 `--annotate-only --resume` 继续。",
+            "",
+            "## 可复现",
+            "",
+        ]
+    else:
+        lines += [
+            "",
+            "## Limitations",
+            "",
             "- Infer at the biological-replicate level; Wilcoxon is exploratory.",
             "- UMAP is visualization. Annotation is layered evidence.",
             "- Do not describe plots that were not generated.",
-            "- HITL: `--interrupt` then `--annotate-only`.",
+            "- HITL: `--interrupt` then `--annotate-only --resume`.",
+            "",
+            "## Reproducibility",
             "",
         ]
+    lines += [
+        f"- thread_id: {state.get('thread_id')}",
+        f"- jail: {(state.get('execution_qc') or {}).get('jail')}",
+        f"- snapshots: {', '.join((state.get('execution_qc') or {}).get('snapshots') or []) or ('无' if zh else 'none')}",
+        "- structured log: outputs/run_log.json",
+        "- provenance: outputs/memory.yaml（步骤与参数，不是聊天）",
+        "",
+    ]
+    mem = state.get("analysis_memory")
+    if mem:
+        from agents.memory import dump_memory_yaml
+
+        lines += ["```yaml", dump_memory_yaml(mem).rstrip(), "```", ""]
     return "\n".join(lines)
 
 
@@ -169,3 +200,59 @@ def render_report(state: dict) -> str:
     if lang == "both":
         return _one_lang(state, "zh") + "\n\n---\n\n" + _one_lang(state, "en")
     return _one_lang(state, "en" if lang == "en" else "zh")
+
+
+def render_html(state: dict) -> str:
+    md = render_report(state)
+    arts = state.get("artifacts") or {}
+    imgs = []
+    for cap in arts.get("figure_captions") or []:
+        p = cap.get("path") or ""
+        if p:
+            kind = cap.get("kind") or "figure"
+            cap_txt = cap.get("caption") or p
+            imgs.append(
+                f'<figure><img src="{p}" alt="{kind}" style="max-width:100%"/>'
+                f"<figcaption>{cap_txt}</figcaption></figure>"
+            )
+    body = md.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>scAgent report</title>"
+        "<style>body{font-family:sans-serif;max-width:920px;margin:2rem auto}"
+        "pre{white-space:pre-wrap}img{max-width:100%;height:auto}figure{margin:1.5rem 0}</style>"
+        f"</head><body><pre>{body}</pre>{''.join(imgs)}</body></html>"
+    )
+
+
+def write_run_log(state: dict, out_dir) -> None:
+    import json
+    from pathlib import Path
+
+    from agents.memory import build_memory
+    from scagent.config import analysis_params
+
+    payload = {
+        "thread_id": state.get("thread_id"),
+        "status": state.get("status"),
+        "query": state.get("user_query"),
+        "params": analysis_params(),
+        "provenance": state.get("analysis_memory") or build_memory(state),
+        "skills": state.get("skills_used") or (state.get("plan") or {}).get("skills"),
+        "route": (state.get("plan") or {}).get("route"),
+        "integrator": (state.get("plan") or {}).get("integrator"),
+        "metrics": (state.get("artifacts") or {}).get("metrics"),
+        "review_qc": {
+            "passed": (state.get("review_qc") or {}).get("passed"),
+            "issues": (state.get("review_qc") or {}).get("issues"),
+            "issue_records": (state.get("review_qc") or {}).get("issue_records"),
+        },
+        "review_downstream": {
+            "passed": (state.get("review_downstream") or {}).get("passed"),
+            "issues": (state.get("review_downstream") or {}).get("issues"),
+            "issue_records": (state.get("review_downstream") or {}).get("issue_records"),
+        },
+        "jail": (state.get("execution_qc") or {}).get("jail"),
+        "snapshots": (state.get("execution_qc") or {}).get("snapshots"),
+    }
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    (Path(out_dir) / "run_log.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -5,13 +5,18 @@ channels:
 dependencies:
   - python=3.11
   - pip
-  - scanpy>=1.10
+  - scanpy>=1.10,<1.12
   - anndata>=0.10
   - numpy
   - pandas
   - scipy
   - scikit-learn
-  - leidenalg
-  - python-igraph
+  - leidenalg>=0.10
+  - python-igraph>=0.11
   - pip:
       - -r requirements.txt
+      - harmonypy>=0.0.10
+      - celltypist>=1.6
+      - scvi-tools>=1.1,<2
+      - scanorama>=1.7
+      - joblib>=1.3

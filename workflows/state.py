@@ -17,6 +17,9 @@ class AgentState(TypedDict, total=False):
     markers_path: str | None
     integrator: str | None
     imputation: str | None
+    ambient: str | None
+    remove_doublets: bool
+    condition_key: str | None
     qc_method: str | None
     report_lang: str
     phase: str  # qc | downstream
@@ -32,6 +35,7 @@ class AgentState(TypedDict, total=False):
     execution: dict[str, Any]
     review_qc: dict[str, Any]
     review_downstream: dict[str, Any]
+    review_publication: dict[str, Any]
     review: dict[str, Any]
     retry_count_qc: int
     retry_count_downstream: int
@@ -41,3 +45,5 @@ class AgentState(TypedDict, total=False):
     skills_used: list[str]
     r_degraded: bool
     status: str
+    thread_id: str
+    analysis_memory: dict[str, Any]

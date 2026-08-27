@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 
 from agents.common import read_prompt, run_specialist
+from agents.dependencies import resolve_route
+from agents.intent import parse_intent
+from agents.markers import choose_celltypist_model
 from rag.retriever import format_hits, retrieve
 from scagent.config import analysis_params, load_config
+from scagent.preprocess import choose_ambient
 from scagent.skills_loader import recommend_skills, skill_catalog_text
 
 SCVI_CELL_CUTOFF = 100_000
@@ -46,6 +50,15 @@ def build_plan(state: dict) -> dict:
         meta["skip_integration_reason"] = "user disabled batch module"
     skills = [] if r_degraded else recommend_skills({**meta, "integrator": integrator}, language=language)
     imputation = "none" if r_degraded else (state.get("imputation") or (cfg.get("modules") or {}).get("imputation") or "none")
+    ambient = "none" if r_degraded else choose_ambient(
+        meta.get("tissue"), state.get("ambient") or (cfg.get("modules") or {}).get("ambient")
+    )
+    intent = {} if r_degraded else parse_intent(state.get("user_query"), cfg)
+    needs_pb = False if r_degraded else bool(intent.get("condition_comparison") or "deg" in (intent.get("intents") or []))
+    if state.get("condition_key"):
+        meta["condition_key"] = state["condition_key"]
+        needs_pb = True
+    ct_model = None if r_degraded else choose_celltypist_model(meta.get("tissue"), meta.get("species"))
     resolution = state.get("resolution")
     if resolution is None:
         resolution = analysis_params(cfg).get("leiden_resolution")
@@ -58,16 +71,16 @@ def build_plan(state: dict) -> dict:
     if r_degraded:
         route = ["plan_only"]
     else:
-        route = ["qc", "normalize", "hvg", "pca"]
-        if integrator:
-            route.append(integrator)
-        if imputation and imputation != "none":
-            route.append(f"impute_{imputation}")
-        route += ["neighbors", "leiden", "umap", "annotate"]
-        if "deg" in str(state.get("user_query") or "").lower() or "差异" in str(state.get("user_query") or ""):
-            route.append("pseudobulk_deg")
-        if "轨迹" in str(state.get("user_query") or "") or "paga" in str(state.get("user_query") or "").lower():
-            route.append("trajectory")
+        intents = list(intent.get("intents") or ["qc", "clustering", "annotation"])
+        if needs_pb and "deg" not in intents:
+            intents.append("deg")
+        route = resolve_route(
+            intents,
+            integrator=integrator,
+            imputation=imputation,
+            ambient=ambient,
+            r_degraded=False,
+        )
 
     plan = {
         "objective": state.get("user_query") or "标准 scRNA-seq 分析",
@@ -79,6 +92,11 @@ def build_plan(state: dict) -> dict:
         "integrator": integrator,
         "skip_integration_reason": meta.get("skip_integration_reason"),
         "imputation": imputation or "none",
+        "ambient": ambient,
+        "needs_pseudobulk": needs_pb,
+        "condition_key": meta.get("condition_key"),
+        "celltypist_model": ct_model,
+        "intent": intent if not r_degraded else {"intents": [], "source": "r_degraded"},
         "resolution": resolution,
         "language": language,
         "r_degraded": r_degraded,
@@ -118,6 +136,6 @@ def build_plan(state: dict) -> dict:
         plan["narrative"] = (
             "R/Seurat 路径未实现为可执行代码（仓库 SOP 为 Scanpy）。以下为规划与风险，请在 R 环境按 skills 意图手工实现，"
             "或改用 --language python。"
-            f" 建议路线: QC(MAD) → 归一化 → HVG → PCA → 整合(如需) → Leiden → 注释双验证。"
+            " 建议路线: QC(MAD) → 归一化 → HVG → PCA → 整合(如需) → Leiden → 注释双验证。"
         )
     return plan

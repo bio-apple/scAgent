@@ -35,23 +35,24 @@ flowchart TD
   Q --> INS[inspect]
   IO --> INS
   INS --> PL[planner + RAG + skills]
-  PL -->|language=r| W[writer 仅规划]
+  PL -->|language=r| RP[Reviewer 发表级卡片]
   PL --> QC[qc_expert]
   QC --> CQ[bio_coder QC]
   CQ --> EQ[execute QC]
   EQ --> RQ[reviewer 代码+执行]
   RQ -->|失败重试| CQ
-  RQ -->|qc-only / interrupt| W
+  RQ -->|qc-only / interrupt| RP
   RQ --> AN[annotation 双验证]
   AN --> CD[bio_coder downstream]
   CD --> ED["execute: PCA/Leiden/DEG n_jobs + .cache/"]
   ED --> RD[reviewer]
   RD -->|失败重试| CD
-  RD --> W
-  W --> OUT["outputs/report.md"]
+  RD --> RP
+  RP --> W[Publication Report]
+  W --> OUT["outputs/report.md + report.html + run_log.json"]
 ```
 
-Reviewer 同时看 **代码** 和 **execution**（returncode、MAD 移除比例、h5ad、figures）。  
+工作流是 **Planner → Executor → Reviewer → Publication Report**。阶段 Reviewer 同时看 **代码** 和 **execution**（returncode、MAD 移除比例、h5ad、figures）；发表级 Reviewer 再汇总 QC / marker / DEG / 图 / 批次校正，给出 **PASS / FAIL / Missing** 与 **Overall score**。  
 Annotation 产出可执行 CellTypist + ≥2 阳性 + ≥1 阴性 marker。  
 Writer 只根据 `artifacts` 写报告，缺图写「未执行」。
 
@@ -94,6 +95,9 @@ workspace/cluster_annotate.py
 workspace/reproducible_script.py
 workspace/run_manifest.json      # 种子、skill fingerprint、数据路径哈希前缀
 outputs/report.md
+outputs/report.html              # Markdown 转义 + 嵌入 figures
+outputs/run_log.json             # 过滤统计、参数、skills、issue_records
+outputs/memory.yaml              # 分析 provenance：步骤+参数，不是聊天；失败用 --from-checkpoint
 ```
 
 未 `--execute` 时报告会写明图未生成。真跑：
@@ -158,17 +162,22 @@ Seurat `.rds` 走 `scagent/r/io.R`（zellkonverter）。Python 可执行路径�
 | `--markers` | 自定义 marker CSV/JSON |
 | `--report-lang zh\|en\|both` | 报告语言 |
 | `--language r` | 仅规划 + 警告，不生成 Seurat |
+| `--thread-id` / `--resume` / `--from-checkpoint` | LangGraph SQLite checkpoint。崩溃后同一 thread 续跑，不重复已成功节点 |
 
 ```bash
 python -m scagent retrieve "Harmony versus scVI"
 python -m scagent retrieve "B cell MS4A1" --collections papers,markers
 python -m scagent retrieve "pseudobulk FDR" --collections best_practices,papers
+python -m scagent memory
 python -m scagent skills
 ```
 
 | `--integrator auto\|none\|harmony\|scvi\|cca` | 批次模块。`cca` 为 Scanorama（CCA/MNN 风格）；Seurat CCA 不自动生成 |
 | `--impute none\|magic\|alra` | Dropout 插补，写入 `layers['imputed']`，不覆盖用于 DE 的 X |
-| `--qc-method mad\|percentile\|hybrid` | 动态阈值；`config.yaml` 的 `qc.hard` 为 null 时不套 mito%<5 |
+| `--ambient auto\|none\|soupx\|decontx` | Ambient RNA。brain/tumor 的 `auto` 走 SoupX 风格校正，不只是警告 |
+| `--remove-doublets` | Scrublet 写入 `predicted_doublet` 后过滤 |
+| `--condition-key` | 组间比较列；触发 sample-level pseudobulk + FDR |
+| `--qc-method mad\|percentile\|hybrid` | 动态阈值；`config.qc.hard` 为 null 时不套 mito%<5 |
 
 把 PDF 放入 `knowledge/papers/` 后重新 `ingest`。步骤级最佳实践在 `best_practices/reference/`（QC、HVG、整合、注释、pseudobulk 等）。自定义 marker CSV 列：`cell_type,positive,negative,lineage`（`;` 分隔）。
 
@@ -176,10 +185,16 @@ python -m scagent skills
 
 - **Skills**：不拆成 `skills/R` 与 `skills/python`。fingerprint 写入 `run_manifest.json`。
 - **整合**：可选模块。单样本默认不做。`--integrator none` 可关。auto：小数据 Harmony，≥10 万细胞或 ≥8 样本 scVI。
-- **QC**：MAD / percentile / hybrid，组织 profile 可改 `nmads`。禁止默认 mito%<5。
-- **注释**：层级 lineage（Immune→T→CD8→Tex）。自动注释只是假说，marker 双验证说了算；冲突保留 marker。
+- **QC**：MAD / percentile / hybrid，组织 profile 可改 `nmads`。禁止默认 mito%<5。Scrublet 写入 `predicted_doublet`；脑/肿瘤默认 ambient 校正；细胞周期评分，`regress_cell_cycle: auto`。
+- **注释**：按组织选择 CellTypist 模型（不用 Immune_All 套肝脏/心脏）。第二参考交叉验证 + marker 双验证。
+- **DE**：探索性 Wilcoxon 仅用于 cluster marker；条件比较走 sample-level pseudobulk + FDR。
+- **整合评估**：优先 scIB iLISI/kBET，否则 kNN-iLISI 与 PCA 批次 R²；不再只靠 cluster 主导批次比例。
 - **插补**：MAGIC / ALRA 可选，不改 DE 用的 X。
-- **配置**：路径/PCA/HVG/Leiden/LLM 重试都在 `config.yaml`；密钥只走环境变量。
+- **RAG**：BM25 + 向量召回 + Rerank；中英同义扩展（批次效应校正 → Harmony）。文档按章节/段落切分。向量模型可选 `pip install -e '.[rag]'`（sentence-transformers），未安装时用稳定 hashing 向量。
+- **Checkpoint**：`checkpoint.backend=sqlite` 持久化 AgentState（含 retry/execution）。`--thread-id` + `--resume` 从断点继续。
+- **规划**：意图走 JSON schema（qc/clustering/deg/trajectory/annotation），步骤依赖在 `agents/dependencies.py`。
+- **执行隔离**：LLM 脚本默认 seatbelt/bwrap + rlimit + 静态策略；密钥不传入子进程；超时杀进程组。`sandbox.network: auto` 时 QC 禁网、下游允许 CellTypist 下载。可选 `isolation: docker` + `SCAGENT_DOCKER_IMAGE`。`sandbox.enabled: false` 可关。
+- **闭环**：执行失败把 stdout/stderr + metrics 回灌 bio_coder；Reviewer 产出结构化 `issue_records`；过过滤用 `qc.overfilter_warn_pct`。成功后的 h5ad 快照在 `.cache/steps/`。
 - **鲁棒性**：LLM 指数退避重试、RPM 限速、token 用量写入日志；图节点用 `logging` 而不是 print。
 - **性能**：CSR 稀疏；`n_obs ≥ backed_threshold_cells` 时 h5ad `backed='r'`；Scanpy `n_jobs` + joblib 并行 marker/DEG。
 - **缓存**：耗时步骤写入 `.cache/`（QC h5ad、聚类、LLM JSON），中断后可续跑。
@@ -192,7 +207,7 @@ python -m scagent skills
 | 缺少 violin/scatter | 不要删 LOCKED QC 块 |
 | `harmonypy` / CellTypist 警告 | 安装 analysis extra；脚本会降级并写 `SCAGENT_WARN` |
 | `--language r` 退出码 2 | 预期：未实现可执行 Seurat |
-| 执行失败仍进注释 | 不应发生；QC returncode≠0 会重试或停在 writer |
+| 执行失败仍进注释 | 不应发生；QC returncode≠0 会重试或停在发表级 Reviewer 后写报告 |
 
 ## 测试
 

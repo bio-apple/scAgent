@@ -3,13 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agents.artifacts import skills_fingerprint
-from scagent.config import analysis_params
+from agents.artifacts import parse_metrics, skills_fingerprint
+from sandbox.jail import isolated_env, resolve_network, run_jailed, sandbox_settings
+from sandbox.policy import policy_violations
+from scagent.config import analysis_params, load_config
 from scagent.logutil import get_logger, timed
 
 log = get_logger("executor")
@@ -54,6 +56,29 @@ def _refresh_reproducible(workspace: Path, filename: str, code: str) -> None:
     (workspace / "reproducible_script.py").write_text(code, encoding="utf-8")
 
 
+def _cleanup_tmp(workspace: Path) -> None:
+    tmp = workspace / "sandbox_tmp"
+    if tmp.is_dir():
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(exist_ok=True)
+
+
+def _snapshot_h5ads(workspace: Path, phase: str) -> list[str]:
+    from scagent.config import resolve_path
+
+    cfg = load_config()
+    dest = resolve_path(cfg, "cache") / "steps" / (phase or "run")
+    dest.mkdir(parents=True, exist_ok=True)
+    saved: list[str] = []
+    for name in ("adata_qc.h5ad", "adata_processed.h5ad"):
+        src = workspace / name
+        if src.is_file():
+            target = dest / name
+            shutil.copy2(src, target)
+            saved.append(str(target))
+    return saved
+
+
 def write_and_maybe_run(
     code: str,
     *,
@@ -62,6 +87,7 @@ def write_and_maybe_run(
     timeout: int = 600,
     filename: str = "analysis.py",
     extra_manifest: dict | None = None,
+    cfg: dict | None = None,
 ) -> dict:
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "figures").mkdir(exist_ok=True)
@@ -99,10 +125,27 @@ def write_and_maybe_run(
         "returncode": 0,
         "figures": [str(p) for p in sorted((workspace / "figures").glob("*")) if p.is_file()],
         "missing_packages": [],
+        "jail": None,
+        "metrics": {},
+        "warnings": [],
     }
     if not execute or not code:
         result["stderr"] = "未执行代码。已写入脚本与 run_manifest.json。"
         return result
+
+    cfg = cfg or load_config()
+    sb = sandbox_settings(cfg)
+    phase = str((extra_manifest or {}).get("phase") or "")
+    sb["network"] = resolve_network(sb, phase=phase)
+    if sb.get("static_policy", True) and sb.get("enabled", True):
+        blocked = policy_violations(code)
+        if blocked:
+            result["ok"] = False
+            result["returncode"] = 126
+            result["stderr"] = "sandbox policy blocked: " + ", ".join(blocked)
+            result["jail"] = "policy"
+            log.error("%s", result["stderr"])
+            return result
 
     needs_scanpy = filename in {"qc_preprocess.py", "cluster_annotate.py"} or "import scanpy" in code
     if needs_scanpy:
@@ -113,24 +156,35 @@ def write_and_maybe_run(
             result["stderr"] = "缺少依赖: " + ", ".join(missing) + "。pip install -r requirements-analysis.txt"
             return result
 
-    env = os.environ.copy()
-    env.setdefault("PYTHONHASHSEED", str(analysis_params()["seed"]))
-    log.info("execute %s timeout=%s", script, timeout)
+    seed = analysis_params(cfg)["seed"]
+    env = isolated_env(workspace, seed=seed) if sb.get("enabled", True) else os.environ.copy()
+    env.setdefault("PYTHONHASHSEED", str(seed))
+    isolation = "off" if not sb.get("enabled", True) else sb.get("isolation") or "auto"
+    sb = {**sb, "isolation": isolation}
+    log.info("execute %s timeout=%s isolation=%s", script, timeout, isolation)
     with timed(f"execute.{filename}", log):
-        proc = subprocess.run(
+        proc = run_jailed(
             [sys.executable, str(script)],
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+            workspace=workspace,
             env=env,
+            timeout=timeout,
+            settings=sb,
         )
+        jail = getattr(proc, "jail", isolation)
     result["executed"] = True
     result["stdout"] = proc.stdout
     result["stderr"] = proc.stderr
     result["returncode"] = proc.returncode
     result["ok"] = proc.returncode == 0
+    result["jail"] = jail
     result["figures"] = [str(p) for p in sorted((workspace / "figures").glob("*")) if p.is_file()]
+    metrics, warns = parse_metrics(result["stdout"], result["stderr"])
+    result["metrics"] = metrics
+    result["warnings"] = warns
+    if result["ok"] and sb.get("enabled", True):
+        result["snapshots"] = _snapshot_h5ads(workspace, phase or filename)
+        if sb.get("cleanup_tmp", True):
+            _cleanup_tmp(workspace)
     if not result["ok"]:
-        log.error("script failed returncode=%s", proc.returncode)
+        log.error("script failed returncode=%s jail=%s", proc.returncode, jail)
     return result

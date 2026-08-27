@@ -4,7 +4,17 @@ import re
 from pathlib import Path
 
 from agents.common import read_prompt, run_specialist
+from agents.markers import choose_celltypist_model
 from agents.templates import LOCKED_END, LOCKED_START
+from scagent.config import load_config
+
+
+def _records_and_messages(records: list[dict]) -> tuple[list[dict], list[str]]:
+    return records, [r["message"] for r in records]
+
+
+def _add(records: list[dict], message: str, *, id: str, severity: str = "fail", source: str = "code") -> None:
+    records.append({"id": id, "severity": severity, "source": source, "message": message})
 
 
 def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> dict:
@@ -12,8 +22,7 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
     metadata = metadata or {}
     text = code or ""
     low = text.lower()
-    issues: list[str] = []
-
+    records: list[dict] = []
     has_violin = "violin" in low or "vlnplot" in low
     has_scatter = "scatter" in low
     has_mad = "median_abs_deviation" in low or bool(re.search(r"\bmad\b", low))
@@ -24,61 +33,81 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
     has_dual = ("positive" in low and "negative" in low) or "dual" in low
     has_seed = "seed" in low
     has_pseudobulk_note = "pseudobulk" in low and ("fdr" in low or "padj" in low or "多重" in text)
+    has_pseudobulk_impl = "pseudobulk_de" in low or "get.aggregate" in low or "sc.get.aggregate" in low
+    has_ref2 = any(k in low for k in ("ref2_label", "singler", "azimuth", "popv", "second_reference", "ref_crossval"))
+    has_predicted_doublet = "predicted_doublet" in low
+    has_padj = "pvals_adj" in low or "padj" in low or "fdr" in low
+    tissue = str((metadata or {}).get("tissue") or "").lower()
+    ct_model = choose_celltypist_model(tissue, (metadata or {}).get("species"))
 
     if phase == "qc":
         if not has_violin:
-            issues.append("QC 缺少 Violin/VlnPlot")
+            _add(records, "QC 缺少 Violin/VlnPlot", id="qc.violin")
         if not has_scatter:
-            issues.append("QC 缺少 Scatter")
+            _add(records, "QC 缺少 Scatter", id="qc.scatter")
         if not has_mad:
-            issues.append("QC 未使用 MAD 自适应阈值")
+            _add(records, "QC 未使用 MAD 自适应阈值", id="qc.mad")
         if not has_locked:
-            issues.append("QC 缺少不可删除的 LOCKED QC 代码块")
+            _add(records, "QC 缺少不可删除的 LOCKED QC 代码块", id="qc.locked")
         if has_mad and not mt_one_sided:
-            issues.append("线粒体 MAD 应为单侧（只滤高 pct_mt）")
+            _add(records, "线粒体 MAD 应为单侧（只滤高 pct_mt）", id="qc.mt_side")
         if not log1p_qc:
-            issues.append("calculate_qc_metrics 需 log1p=True，以便 MAD 使用 log1p_total_counts 列")
+            _add(records, "calculate_qc_metrics 需 log1p=True，以便 MAD 使用 log1p_total_counts 列", id="qc.log1p")
         if re.search(r"pct[_]?mt\s*[<>=]+\s*(5|10)\b", low):
-            issues.append("使用了固定 pctMT=5/10 阈值，应改为看分布 + MAD/percentile")
+            _add(records, "使用了固定 pctMT=5/10 阈值，应改为看分布 + MAD/percentile", id="qc.hard_mt")
+        if not has_predicted_doublet and "scrublet" not in low:
+            _add(records, "QC 缺少 Scrublet / predicted_doublet", id="qc.doublet")
+        if "scrublet skipped" in low and "predicted_doublet" not in low:
+            _add(records, "Scrublet 被跳过且未写入 predicted_doublet", id="qc.doublet_skip")
 
     if phase == "downstream":
         if metadata.get("need_batch_correction"):
             integrated = any(k in low for k in ("harmony", "scvi", "scanorama", "cca"))
             skipped = "skip integration" in low or "跳过整合" in text or "user disabled batch" in low
             if not integrated and not skipped:
-                issues.append("多样本未做整合，也未声明跳过理由")
+                _add(records, "多样本未做整合，也未声明跳过理由", id="down.integrate")
+            if integrated and re.search(r"umap.{0,40}(mix|mixed|混匀)", low) and "ilisi" not in low and "kbet" not in low:
+                _add(records, "禁止把 UMAP 混匀当作整合成功；需 iLISI/kBET/PCA-R²", id="down.umap_mix")
         if "umap" in low and re.search(r"leiden\(.*umap|cluster.*umap", low):
-            issues.append("疑似在 UMAP 坐标上聚类")
-        if not has_celltypist:
-            issues.append("注释未调用 CellTypist（或未显式失败降级）")
+            _add(records, "疑似在 UMAP 坐标上聚类", id="down.cluster_umap")
+        if ct_model:
+            if not has_celltypist:
+                _add(records, "注释未调用 CellTypist（或未显式失败降级）", id="down.celltypist")
+            if tissue not in {"pbmc", "blood", "immune"} and (
+                "immune_all_low.pkl" in low or "immune_all_high.pkl" in low
+            ):
+                _add(records, "非免疫组织使用了 Immune_All CellTypist 模型", id="down.immune_all")
+        else:
+            if "immune_all_low.pkl" in low or "immune_all_high.pkl" in low:
+                _add(records, "无匹配模型的组织不应默认 Immune_All", id="down.immune_all_default")
+        if not has_ref2:
+            _add(records, "缺少第二参考注释（SingleR/Azimuth/popV 或 ref2_label 交叉验证）", id="down.ref2")
         if not has_dual:
-            issues.append("注释缺少 dual validation（≥2 阳性 + ≥1 阴性 marker）")
+            _add(records, "注释缺少 dual validation（≥2 阳性 + ≥1 阴性 marker）", id="down.dual")
         if "cell_type_l1" not in low and "lineage" not in low:
-            issues.append("注释缺少层级字段（cell_type_l1 / lineage）")
-        if "rank_genes_groups" in low and not has_pseudobulk_note:
-            issues.append("差异表达未声明探索-only / 组间须 pseudobulk+FDR")
+            _add(records, "注释缺少层级字段（cell_type_l1 / lineage）", id="down.lineage")
+        if metadata.get("needs_pseudobulk"):
+            if not has_pseudobulk_impl or not (has_pseudobulk_note or "fdr" in low):
+                _add(records, "组间比较必须 sample-level pseudobulk + FDR，不能只用 cell-level Wilcoxon", id="down.pseudobulk")
+        elif "rank_genes_groups" in low and not has_pseudobulk_note:
+            _add(records, "差异表达未声明探索-only / 组间须 pseudobulk+FDR", id="down.deg_note")
+        if "rank_genes_groups" in low and not has_padj:
+            _add(records, "rank_genes_groups 必须使用 pvals_adj/FDR，不能只看 raw p", id="down.padj")
         if "cell_type" in low and not has_dual:
-            issues.append("单基因或无双验证的细胞类型赋值")
+            _add(records, "单基因或无双验证的细胞类型赋值", id="down.single_gene")
 
     if not has_seed:
-        issues.append("未固定随机种子")
+        _add(records, "未固定随机种子", id="seed", severity="warn")
+
+    _, issues = _records_and_messages(records)
 
     hard = [x for x in issues if not x.startswith("未固定")]
-    if phase == "qc":
-        passed = bool(has_violin and has_scatter and has_mad and has_locked) and not any(
-            x.startswith("QC ") or "pctMT=10" in x or "单侧" in x or "log1p=True" in x for x in issues
-        )
-    else:
-        passed = not any(
-            x.startswith("注释") or "多样本未做整合" in x or "UMAP 坐标" in x or "pseudobulk" in x or "层级" in x
-            for x in issues
-        )
-        if not (has_celltypist and has_dual):
-            passed = False
+    passed = not any(r.get("severity") == "fail" for r in records)
 
     return {
         "passed": passed,
         "issues": issues,
+        "issue_records": records,
         "required_fixes": hard if not passed else [],
         "has_violin": has_violin,
         "has_scatter": has_scatter,
@@ -86,6 +115,8 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
         "has_locked": has_locked,
         "has_celltypist": has_celltypist,
         "has_dual": has_dual,
+        "has_ref2": has_ref2,
+        "has_pseudobulk_impl": has_pseudobulk_impl,
         "phase": phase,
     }
 
@@ -101,61 +132,270 @@ def audit_execution(
     execution = execution or {}
     artifacts = artifacts or {}
     metadata = metadata or {}
-    issues: list[str] = []
+    records: list[dict] = []
     if not execute_code or not execution.get("executed"):
+        rec = {"id": "exec.skip", "severity": "warn", "source": "execution", "message": "未执行代码，结果指标未验证"}
         return {
             "passed": True,
             "skipped": True,
-            "issues": ["未执行代码，结果指标未验证"],
+            "issues": [rec["message"]],
+            "issue_records": [rec],
         }
 
     if not execution.get("ok"):
-        issues.append("执行失败（非零 returncode）")
+        _add(records, "执行失败（非零 returncode）", id="exec.nonzero", source="execution")
         err = (execution.get("stderr") or "")[-800:]
         if err:
-            issues.append(f"stderr: {err[:300]}")
+            _add(records, f"stderr: {err[:300]}", id="exec.stderr", source="execution")
 
     metrics = artifacts.get("metrics") or {}
-    # phase-specific metrics may be nested
     phase_art = (artifacts.get("phases") or {}).get(phase) or {}
-    metrics = {**metrics, **(phase_art.get("metrics") or {})}
+    metrics = {**metrics, **(phase_art.get("metrics") or {}), **(execution.get("metrics") or {})}
 
     if phase == "qc":
         pct = metrics.get("pct_removed")
-        if pct is not None and float(pct) > 30:
-            issues.append(f"过度过滤：MAD 移除 {pct:.1f}% 细胞")
+        warn_pct = float(
+            metadata.get("overfilter_warn_pct")
+            if metadata.get("overfilter_warn_pct") is not None
+            else (load_config().get("qc") or {}).get("overfilter_warn_pct")
+            or 30
+        )
+        if pct is not None and float(pct) > warn_pct:
+            _add(records, f"过度过滤：MAD 移除 {float(pct):.1f}% 细胞（阈值 {warn_pct:.0f}%）", id="exec.overfilter", source="execution")
         h5ad = (artifacts.get("h5ads") or {}).get("qc") or (phase_art.get("h5ads") or {}).get("qc")
         if execution.get("ok") and not h5ad:
-            issues.append("未写出 adata_qc.h5ad")
-        figs = artifacts.get("figures") or phase_art.get("figures") or []
+            _add(records, "未写出 adata_qc.h5ad", id="exec.qc_h5ad", source="execution")
+        figs = artifacts.get("figures") or phase_art.get("figures") or execution.get("figures") or []
         names = " ".join(Path(p).name.lower() for p in figs)
         if execution.get("ok"):
             if "violin" not in names:
-                issues.append("执行后缺少 violin 图")
+                _add(records, "执行后缺少 violin 图", id="exec.violin", source="execution")
             if "scatter" not in names:
-                issues.append("执行后缺少 scatter 图")
+                _add(records, "执行后缺少 scatter 图", id="exec.scatter", source="execution")
+        dstat = metrics.get("doublet_status")
+        if dstat == "failed":
+            _add(records, "Scrublet 未成功写入 predicted_doublet", id="exec.doublet", source="execution")
+        rate = metrics.get("doublet_rate")
+        max_rate = float((load_config().get("qc") or {}).get("doublet_rate_max") or 0.10)
+        if rate is not None and float(rate) > max_rate:
+            _add(records, f"双细胞比例 {float(rate):.1%} 超过 {max_rate:.0%}", id="exec.doublet_rate", source="execution")
 
     if phase == "downstream":
         h5ad = (artifacts.get("h5ads") or {}).get("processed")
         if execution.get("ok") and not h5ad:
-            issues.append("未写出 adata_processed.h5ad")
+            _add(records, "未写出 adata_processed.h5ad", id="exec.processed_h5ad", source="execution")
         mix = metrics.get("batch_cluster_dominance")
-        if metadata.get("need_batch_correction") and mix is not None and float(mix) >= 0.95:
-            issues.append(f"整合质量可疑：cluster 内主导批次比例 {mix:.2f}（可能未混合）")
+        if metadata.get("need_batch_correction"):
+            integ = load_config().get("integration") or {}
+            ilisi = metrics.get("ilisi")
+            kbet = metrics.get("kbet")
+            r2 = metrics.get("pca_batch_r2")
+            if metrics.get("integration_passed") is False:
+                _add(records, "整合质量未达标（iLISI/kBET/PCA-R²）", id="exec.integ", source="execution")
+            elif ilisi is not None and float(ilisi) < float(integ.get("ilisi_min") or 0.8):
+                _add(records, f"iLISI {float(ilisi):.3f} < {integ.get('ilisi_min')}", id="exec.ilisi", source="execution")
+            elif kbet is not None and float(kbet) < float(integ.get("kbet_min") or 0.5):
+                _add(records, f"kBET {float(kbet):.3f} < {integ.get('kbet_min')}", id="exec.kbet", source="execution")
+            elif ilisi is None and kbet is None and r2 is not None and float(r2) > float(integ.get("pca_batch_r2_max") or 0.5):
+                _add(records, f"PCA 批次 R² {float(r2):.3f} 过高", id="exec.pca_r2", source="execution")
+            elif mix is not None and float(mix) >= 0.95:
+                _add(records, f"整合质量可疑：cluster 内主导批次比例 {mix:.2f}（可能未混合）", id="exec.mix", source="execution")
 
-    passed = execution.get("ok") is True and not any(
-        x.startswith("执行失败") or "缺少" in x or "未写出" in x for x in issues
+    _, issues = _records_and_messages(records)
+    passed = execution.get("ok") is True and not any(r.get("severity") == "fail" for r in records)
+    return {"passed": passed, "skipped": False, "issues": issues, "issue_records": records, "metrics": metrics}
+
+
+WEIGHTS = {
+    "qc": 20,
+    "batch_correction": 15,
+    "doublet_detection": 10,
+    "markers": 15,
+    "deg": 10,
+    "figures": 15,
+    "annotation": 15,
+}
+
+ICONS = {"pass": "✅", "fail": "❌", "missing": "⚠️"}
+
+
+def _code(state: dict) -> str:
+    return f"{state.get('code_qc') or ''}\n{state.get('code_downstream') or ''}"
+
+
+def _item(key: str, status: str, detail: str) -> dict:
+    w = WEIGHTS[key]
+    if status == "pass":
+        pts = w
+    elif status == "missing":
+        pts = w // 2
+    else:
+        pts = 0
+    return {"key": key, "status": status, "detail": detail, "weight": w, "points": pts}
+
+
+def publication_review(state: dict) -> dict:
+    """Publication Reviewer card: PASS/FAIL/Missing checklist + 0–100 score."""
+    meta = state.get("metadata") or {}
+    plan = state.get("plan") or {}
+    artifacts = state.get("artifacts") or {}
+    rq = state.get("review_qc") or {}
+    rd = state.get("review_downstream") or {}
+    text = _code(state).lower()
+    warns = " ".join(str(w) for w in (artifacts.get("warnings") or [])).lower()
+    executed = bool(state.get("execute_code")) and any(
+        (state.get(k) or {}).get("executed") for k in ("execution_qc", "execution_downstream")
     )
-    # overfilter is warning: still fail so coder/user sees it, but we treat as fail
-    if any("过度过滤" in x for x in issues):
-        passed = False
-    return {"passed": passed, "skipped": False, "issues": issues, "metrics": metrics}
+    figs = artifacts.get("figures") or []
+    fig_names = " ".join(str(p).lower() for p in figs)
+
+    items: list[dict] = []
+
+    if not (state.get("code_qc") or rq):
+        items.append(_item("qc", "missing", "QC 阶段未运行"))
+    elif rq.get("passed") is False:
+        items.append(_item("qc", "fail", "；".join(rq.get("issues") or ["QC 未通过"])))
+    else:
+        items.append(_item("qc", "pass", "Violin/Scatter/MAD/LOCKED 审查通过"))
+
+    need_batch = bool(meta.get("need_batch_correction") or (int(meta.get("n_samples") or 1) > 1))
+    mets = artifacts.get("metrics") or {}
+    mix = mets.get("batch_cluster_dominance")
+    ilisi = mets.get("ilisi")
+    if not need_batch:
+        items.append(_item("batch_correction", "pass", "单样本，无需批次校正"))
+    elif any(k in text for k in ("harmony", "scvi", "scanorama")):
+        if mets.get("integration_passed") is False or (ilisi is not None and float(ilisi) < 0.8):
+            items.append(_item("batch_correction", "fail", f"整合度量未达标 iLISI={ilisi} mix={mix}"))
+        elif mix is not None and float(mix) >= 0.95:
+            items.append(_item("batch_correction", "fail", f"cluster 内主导批次 {mix:.2f}，可能未混合"))
+        else:
+            items.append(_item("batch_correction", "pass", f"整合={plan.get('integrator') or 'detected'}"))
+    elif "skip integration" in text or plan.get("skip_integration_reason"):
+        items.append(_item("batch_correction", "missing", plan.get("skip_integration_reason") or "已声明跳过整合"))
+    else:
+        items.append(_item("batch_correction", "fail", "多样本未做整合，也未声明跳过"))
+
+    dstat = mets.get("doublet_status")
+    if "scrublet skipped" in warns or dstat == "failed":
+        items.append(_item("doublet_detection", "missing" if dstat != "failed" else "fail", "Scrublet 未成功"))
+    elif "predicted_doublet" in text or "scrublet" in text or "scdblfinder" in text:
+        rate = mets.get("doublet_rate")
+        if rate is not None and float(rate) > 0.10:
+            items.append(_item("doublet_detection", "fail", f"doublet_rate={float(rate):.1%}"))
+        else:
+            items.append(_item("doublet_detection", "pass", "Scrublet → predicted_doublet"))
+    else:
+        items.append(_item("doublet_detection", "missing", "未检测到双细胞检测"))
+
+    if rd.get("has_dual") or ("positive" in text and "negative" in text):
+        items.append(_item("markers", "pass", "≥2 阳性 + ≥1 阴性 marker 双验证"))
+    elif not (state.get("code_downstream") or rd):
+        items.append(_item("markers", "missing", "注释阶段未运行"))
+    else:
+        items.append(_item("markers", "fail", "marker 双验证不完整"))
+
+    need_pb = bool(plan.get("needs_pseudobulk") or meta.get("needs_pseudobulk"))
+    if need_pb:
+        if "pseudobulk_de" in text or "get.aggregate" in text:
+            items.append(_item("deg", "pass", "sample-level pseudobulk + FDR"))
+        else:
+            items.append(_item("deg", "fail", "组间比较仍是 cell-level Wilcoxon"))
+    elif "rank_genes_groups" in text or "wilcoxon" in text:
+        if "pseudobulk" in text:
+            items.append(_item("deg", "pass", "探索性 Wilcoxon；组间须 pseudobulk+FDR"))
+        else:
+            items.append(_item("deg", "fail", "DEG 未声明 pseudobulk/FDR 要求"))
+    else:
+        items.append(_item("deg", "missing", "未做差异表达（或仅 QC）"))
+
+    if not executed:
+        items.append(_item("figures", "missing", "未执行，图未生成"))
+    else:
+        need_violin = bool(state.get("code_qc"))
+        need_umap = bool(state.get("code_downstream"))
+        missing_fig = []
+        if need_violin and "violin" not in fig_names:
+            missing_fig.append("violin")
+        if need_violin and "scatter" not in fig_names:
+            missing_fig.append("scatter")
+        if need_umap and "umap" not in fig_names and "overview" not in fig_names:
+            missing_fig.append("umap")
+        if missing_fig:
+            items.append(_item("figures", "fail", "缺图: " + ", ".join(missing_fig)))
+        else:
+            items.append(_item("figures", "pass", f"{len(figs)} 张图"))
+
+    if rd.get("has_dual") and (
+        rd.get("has_celltypist") or "celltypist" in text or rd.get("has_ref2") or "ref2_label" in text
+    ):
+        if rd.get("passed") is False and any("注释" in x or "dual" in x.lower() for x in (rd.get("issues") or [])):
+            items.append(_item("annotation", "fail", "；".join(rd.get("issues") or ["注释证据不足"])))
+        else:
+            items.append(_item("annotation", "pass", "参考映射 + 第二参考交叉验证 + marker 层级"))
+    elif not (state.get("code_downstream") or rd):
+        items.append(_item("annotation", "missing", "注释阶段未运行"))
+    else:
+        items.append(_item("annotation", "fail", "缺少 CellTypist 或 marker 双验证"))
+
+    score = int(round(sum(i["points"] for i in items)))
+    fails = [i for i in items if i["status"] == "fail"]
+    if fails:
+        verdict = "FAIL"
+    elif any(i["status"] == "missing" for i in items):
+        verdict = "PASS"
+    else:
+        verdict = "PASS"
+    return {
+        "items": items,
+        "score": score,
+        "max_score": 100,
+        "verdict": verdict,
+        "passed": not fails,
+        "phase": "publication",
+    }
+
+
+def format_review_card(card: dict | None, lang: str = "zh") -> str:
+    card = card or {}
+    labels = {
+        "qc": "QC",
+        "batch_correction": "Batch correction",
+        "doublet_detection": "Doublet detection",
+        "markers": "Markers",
+        "deg": "DEG",
+        "figures": "Figures",
+        "annotation": "Cell annotation evidence",
+    }
+    status_txt = {"pass": "PASS", "fail": "FAIL", "missing": "Missing"}
+    lines = ["### Reviewer 输出" if lang != "en" else "### Reviewer output", ""]
+    for it in card.get("items") or []:
+        icon = ICONS.get(it["status"], "•")
+        st = status_txt.get(it["status"], it["status"])
+        label = labels.get(it["key"], it["key"])
+        extra = f" — {it['detail']}" if it.get("detail") else ""
+        lines.append(f"{icon} **{label}:** {st}{extra}")
+    lines += [
+        "",
+        f"**Overall score: {card.get('score', 0)} / {card.get('max_score', 100)}**"
+        + (f"  ({card.get('verdict')})" if card.get("verdict") else ""),
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def review_state(state: dict, phase: str | None = None) -> dict:
     phase = phase or state.get("phase") or "qc"
     code = state.get("code") or (state.get("code_qc") if phase == "qc" else state.get("code_downstream")) or ""
-    meta = state.get("metadata") or {}
+    meta = dict(state.get("metadata") or {})
+    plan = state.get("plan") or {}
+    if plan.get("needs_pseudobulk"):
+        meta["needs_pseudobulk"] = True
+    if plan.get("celltypist_model"):
+        meta["celltypist_model"] = plan["celltypist_model"]
+    qc = state.get("qc_strategy") or {}
+    if qc.get("overfilter_warn_pct") is not None:
+        meta["overfilter_warn_pct"] = qc["overfilter_warn_pct"]
     code_result = audit_code(code, meta, phase=phase)
     exe = state.get("execution") or (
         state.get("execution_qc") if phase == "qc" else state.get("execution_downstream")
@@ -168,11 +408,13 @@ def review_state(state: dict, phase: str | None = None) -> dict:
         metadata=meta,
     )
     issues = list(code_result.get("issues") or []) + list(exe_result.get("issues") or [])
+    records = list(code_result.get("issue_records") or []) + list(exe_result.get("issue_records") or [])
     passed = bool(code_result.get("passed")) and bool(exe_result.get("passed"))
     result = {
         **code_result,
         "passed": passed,
         "issues": issues,
+        "issue_records": records,
         "required_fixes": issues if not passed else [],
         "execution_audit": exe_result,
         "phase": phase,

@@ -47,6 +47,12 @@ rag:
   top_k: 6
   chunk_size: 900
   chunk_overlap: 120
+  chunking: semantic          # semantic（章节/段落）| fixed（旧固定窗）
+  retrieval: hybrid           # hybrid = BM25 + 向量召回 + rerank；bm25 = 仅关键词
+  embed_backend: auto         # auto | hashing | sbert（sentence-transformers）
+  embed_model: sentence-transformers/all-MiniLM-L6-v2
+  candidate_k: 24
+  rrf_k: 60
   # 默认检索 papers；methods / markers / best_practices 作为补充知识源一并入库
   default_collection: papers
   collections:
@@ -57,12 +63,29 @@ rag:
   collection_dirs:
     best_practices: best_practices/reference
 
+checkpoint:
+  backend: sqlite             # sqlite | memory | redis
+  sqlite_path: .cache/checkpoints.sqlite
+  redis_url: null             # 例如 redis://localhost:6379
+
 analysis:
   language: python   # python（现有 skills 主路径）| r（仅规划，不生成 Seurat 代码）
   max_review_retries: 2
   execute_code: false
   timeout_seconds: 600
   seed: 0
+
+# LLM 生成代码的执行隔离。enabled=false 则退回普通 subprocess（仅调试）。
+sandbox:
+  enabled: true
+  isolation: auto          # auto=seatbelt(macOS)/bwrap(Linux)；rlimit；off；docker（需 SCAGENT_DOCKER_IMAGE）
+  network: auto            # auto=QC 禁网、下游允许（CellTypist）；true/false 强制
+  memory_mb: 16384
+  max_processes: 64
+  max_open_files: 4096
+  static_policy: true
+  cleanup_tmp: true
+  docker_image: null
 
 # 过滤：禁止默认 mito%<5 / nFeature>200。组织差异走 qc_profiles + 动态方法。
 qc:
@@ -79,12 +102,22 @@ qc:
     n_genes_min: null
     n_genes_max: null
   overfilter_warn_pct: 30
+  remove_doublets: false      # true 或 CLI --remove-doublets：按 predicted_doublet 过滤
+  doublet_rate_max: 0.10      # 预测双细胞比例超过此值则审查警告/失败
+  regress_cell_cycle: auto    # auto | none | always；auto 在明显周期信号时 regress
 
 # 可选模块。batch=auto 时由样本数/细胞数选择；none 表示不做整合。
 # cca：Python 用 Scanorama（MNN/CCA 风格）；真正的 Seurat CCA 需 R，本仓库不生成半成品 Seurat。
 modules:
   batch: auto                 # auto | none | harmony | scvi | cca
   imputation: none            # none | magic | alra
+  ambient: auto               # auto | none | soupx | decontx；brain/tumor 的 auto → soupx
+
+# 整合质量（scIB iLISI/kBET 优先；否则 PCA 批次 R²）。未达标审查失败并触发重试。
+integration:
+  ilisi_min: 0.8
+  kbet_min: 0.5
+  pca_batch_r2_max: 0.5
 
 qc_profiles:
   pbmc:

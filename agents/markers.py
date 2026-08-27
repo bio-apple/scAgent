@@ -9,6 +9,39 @@ from scagent.config import REPO_ROOT
 DEFAULT_CATALOG = REPO_ROOT / "knowledge" / "markers" / "catalog.json"
 IMMUNE_TISSUES = {"pbmc", "blood", "immune"}
 
+# Official CellTypist filenames (celltypist.org / models_description). Organ atlas names for heart/liver.
+CELLTYPIST_MODELS = {
+    "pbmc": "Immune_All_Low.pkl",
+    "blood": "Immune_All_Low.pkl",
+    "immune": "Immune_All_Low.pkl",
+    "lung": "Human_Lung_Atlas.pkl",
+    "airway": "Cells_Lung_Airway.pkl",
+    "brain": "Developing_Human_Brain.pkl",
+    "gut": "Cells_Intestinal_Tract.pkl",
+    "intestine": "Cells_Intestinal_Tract.pkl",
+    "colon": "Cells_Intestinal_Tract.pkl",
+    "tumor": "Human_Colorectal_Cancer.pkl",
+    "cancer": "Human_Colorectal_Cancer.pkl",
+    "crc": "Human_Colorectal_Cancer.pkl",
+    "embryo": "Pan_Fetal_Human.pkl",
+    "fetal": "Pan_Fetal_Human.pkl",
+    "heart": "Adult_Human_Heart.pkl",
+    "liver": "Adult_Human_Liver.pkl",
+    "kidney": "Adult_Human_Kidney.pkl",
+}
+
+
+def choose_celltypist_model(tissue: str | None, species: str | None = None) -> str | None:
+    """Map tissue → CellTypist model. None = do not use Immune_All on a mismatched organ."""
+    t = str(tissue or "default").lower()
+    if t in {"default", "unknown", ""}:
+        return None
+    if str(species or "").lower() == "mouse" and t in {"brain"}:
+        return "Developing_Mouse_Brain.pkl"
+    if str(species or "").lower() == "mouse" and t in {"gut", "intestine"}:
+        return "Adult_Mouse_Gut.pkl"
+    return CELLTYPIST_MODELS.get(t)
+
 
 def _normalize_entry(row: dict) -> dict:
     name = row.get("name") or row.get("cell_type") or "unknown"

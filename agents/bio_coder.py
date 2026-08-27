@@ -57,6 +57,18 @@ def generate_code(state: dict, phase: str = "qc") -> str:
         fallback = cluster_annotate_script(meta, qc, plan)
         locked = ""
     review = state.get("review_qc" if phase == "qc" else "review_downstream") or state.get("review") or {}
+    exe = state.get("execution_qc" if phase == "qc" else "execution_downstream") or state.get("execution") or {}
+    arts = state.get("artifacts") or {}
+    exec_feedback = {
+        "ok": exe.get("ok"),
+        "executed": exe.get("executed"),
+        "returncode": exe.get("returncode"),
+        "stderr_tail": (exe.get("stderr") or "")[-2000:],
+        "stdout_tail": (exe.get("stdout") or "")[-1200:],
+        "metrics": exe.get("metrics") or arts.get("metrics") or {},
+        "issue_records": review.get("issue_records") or [],
+        "issues": review.get("issues") or [],
+    }
     llm = run_specialist(
         read_prompt("bio_coder"),
         (
@@ -65,9 +77,11 @@ def generate_code(state: dict, phase: str = "qc") -> str:
             f"plan_route={plan.get('route')}\nintegrator={plan.get('integrator')}\n"
             f"qc={json.dumps({k: qc[k] for k in qc if k != 'rag_excerpt'}, ensure_ascii=False)}\n"
             f"reviewer_issues={json.dumps(review, ensure_ascii=False)}\n"
+            f"execution_feedback={json.dumps(exec_feedback, ensure_ascii=False)}\n"
             f"skills:\n{_skill_context(state, phase)}\n"
             "输出完整可运行 Python。QC 阶段必须保留 LOCKED QC 块。"
-            "注释阶段必须含 CellTypist + ≥2 阳性 + ≥1 阴性 marker。"
+            "注释阶段必须含 CellTypist + ≥2 阳性 + ≥1 阴性 marker；低置信度标 unknown/mixed。"
+            "若 execution_feedback.ok 为 false：根据 stderr_tail 修复后再输出完整脚本。"
         ),
     )
     if not llm:
