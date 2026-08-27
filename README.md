@@ -1,54 +1,95 @@
-# Single-Cell RNA-seq Analysis Agent 单细胞生信分析智能体 
+# Single-Cell RNA-seq Analysis Agent
 
-    scAgent/
-    │
-    ├── agents/                     # 智能体定义 (System Prompts, Tools)
-    │   ├── planner/                # 调度核心:读取 metadata、判断物种、平台（10x/Parse）、是否多样本，然后决定分析路线
-    │   ├── qc_expert/              # 动态质控策略制定:不直接用固定阈值，而是根据组织自动推荐 QC，例如肿瘤、脑组织、PBMC 不同策略。输出必须包含 VlnPlot、Scatter、MAD 判断。
-    │   ├── bio_coder/              # 代码生成 主语言 R（Seurat)，Python:Scanpy、Squidpy（备用）
-    │   ├── annotation/             # 细胞注释与 Marker 校验,综合 Marker + CellMarker2.0 + PanglaoDB + Azimuth，不允许只看一个基因决定细胞类型。
-    │   ├── reviewer/               # 结果评估、异常检测与代码自纠错 (Debug),审核每一步是否符合统计规范，例如 DEG 是否做多重校正、批次是否真的消除、UMAP 是否过聚类。
-    │   └── writer/                 # 整合图表与分析结论，生成报告,自动写 Result，不解释不存在的现象，每张图都有 Figure legend。
-    │
-    ├── skills/                     # 标准操作规程 (SOP / Standard Prompting)
-    │   ├── R/
-    │   │   ├── seurat_qc.md
-    │   │   ├── harmony.md
-    │   │   └── cellchat.md
-    │   └── python/
-    │       ├── scanpy_qc.md
-    │       └── scrublet.md
-    │
-    ├── knowledge/                  # RAG 知识库
-    │   ├── methods/                # 算法原理与适用场景 (如 Scran vs LogNormalize)
-    │   ├── markers/                # CellMarker, PanglaoDB 数据库
-    │   └── papers/                 # 最新文献洞察
-    │
-    ├── workflows/                  # 基于 LangGraph 的状态图定义
-    │   ├── state.py                # 定义 AgentState (传递全局分析数据与代码状态)
-    │   └── scRNA_langgraph.py      # 主流程编排
-    │
-    ├── sandbox/                    # 代码执行沙盒 (Jupyter Kernel / Docker)
-    │   └── executor.py
-    │
-    ├── workspace/                  # 运行时动态生成的临时代码与图像
-    ├── outputs/                    # 终版产物 (RDS/H5AD/HTML Report)
-    │
-    ├── prompts/                    # 公用 Prompt 模版
-    ├── report_templates/           # RMarkdown / Quarto / HTML 报告模板
-    ├── tests/                      # 单元测试 (测试 Agent 是否能正确纠错)
-    ├── requirements.txt            # Python 依赖
-    └── config.yaml                 # 模型 API Key、内存限制、路径配置
+基于 LangGraph 的单细胞生信分析智能体：调度 → 动态 QC → 代码生成 → 审查纠错 → 注释 → 报告。  
+RAG 默认检索 `knowledge/papers`。仓库里现有的 SciAgent-style skills **保持原样**，作为可执行 SOP。
 
-# 技术栈
+## 目录
 
-|层 | 推荐                 |
-|-|--------------------|
-|Agent | LangGraph          |
+```
+scAgent/
+├── agents/                     # 智能体
+│   ├── planner.py              # 读 metadata，判断物种 / 平台（10x/Parse）/ 多样本，决定路线
+│   ├── qc_expert.py            # 组织感知 QC；必须含 Violin、Scatter、MAD
+│   ├── bio_coder.py            # 主语言 Python/Scanpy（对齐现有 skills）；R/Seurat 为显式备选
+│   ├── annotation.py           # Marker + 参考映射，禁止单基因定论
+│   ├── reviewer.py             # 统计规范、过聚类、假整合、DEG 多重校正
+│   └── writer.py               # 报告；不解释不存在的现象；图注
+├── skills/                     # 已有 SOP（不要拆到 R/python 子目录）
+│   ├── scanpy-scrna-seq/
+│   ├── anndata-data-structure/
+│   ├── harmony-batch-correction/
+│   ├── scvi-tools-single-cell/
+│   ├── celltypist-cell-annotation/
+│   ├── popv-cell-annotation/
+│   ├── cellxgene-census/
+│   └── single-cell-annotation-guide/
+├── knowledge/                  # RAG 语料
+│   ├── papers/                 # 默认检索集合（可再放入 PDF）
+│   ├── methods/
+│   └── markers/
+├── workflows/
+│   ├── state.py
+│   └── scRNA_langgraph.py
+├── sandbox/executor.py
+├── prompts/
+├── report_templates/
+├── tests/
+├── config.yaml
+└── requirements.txt
+```
 
+流程：
 
+`inspect → planner → qc_expert → bio_coder → execute → reviewer ⇄ bio_coder → annotation → writer`
 
+## 安装
 
-# skills 参考来源
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
 
-SciAgent-Skills：https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell
+可选：分析栈 `pip install -e ".[analysis]"`。  
+LLM 可选。未配置 `OPENAI_API_KEY` 时走确定性规划 + Scanpy 模板，图仍可跑通。
+
+```bash
+cp .env.example .env   # 填写 OPENAI_API_KEY；兼容 OpenAI 接口可设 OPENAI_BASE_URL
+```
+
+## 使用
+
+```bash
+# 索引 knowledge/papers
+python -m scagent ingest
+
+# 检索
+python -m scagent retrieve "Harmony versus scVI"
+
+# 已有 skills
+python -m scagent skills
+
+# 规划 + 生成脚本 + 报告（默认不跑分析）
+python -m scagent run "对 PBMC 做标准分析并注释" --data /path/to/data.h5ad --tissue pbmc
+
+# 在 workspace/ 真正执行生成的代码
+python -m scagent run "..." --data /path/to/data.h5ad --execute
+```
+
+产物：`workspace/analysis.py`、`outputs/report.md`。把 PDF 放进 `knowledge/papers/` 后重新 `ingest` 即可进入 RAG。
+
+## 设计选择
+
+- **Skills**：保留当前 `skills/*/SKILL.md`，不按 README 草稿改成 `skills/R` 与 `skills/python`。
+- **语言**：现有 skills 都是 Scanpy 生态，因此 bio_coder 默认 Python；用户传 `--language r` 时会警告缺少对等 SOP。
+- **RAG**：BM25 检索 `knowledge/papers`（同时入库 methods/markers）。不依赖外部 embedding 服务。
+- **QC**：组织 profile 在 `config.yaml`；硬性三件套 Violin / Scatter / MAD。
+- **审查**：缺 QC 三件套或多样本无整合且无理由 → 打回 bio_coder（最多 2 次）。
+
+## 测试
+
+```bash
+pytest -q
+```
+
+Skills 参考来源：[SciAgent-Skills single-cell](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell)

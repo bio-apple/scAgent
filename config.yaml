@@ -1,0 +1,51 @@
+# scAgent 运行配置。API Key 只从环境变量读取，不要写进本文件。
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  # 兼容 OpenAI 接口的网关，例如 https://api.deepseek.com/v1
+  base_url: null
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.1
+  max_tool_rounds: 4
+
+paths:
+  skills: skills
+  knowledge: knowledge
+  workspace: workspace
+  outputs: outputs
+  index: knowledge/.index
+
+rag:
+  top_k: 6
+  chunk_size: 900
+  chunk_overlap: 120
+  # 默认检索 papers；methods / markers 作为补充知识源一并入库
+  default_collection: papers
+  collections:
+    - papers
+    - methods
+    - markers
+
+analysis:
+  language: python   # python（现有 skills 主路径）| r
+  max_review_retries: 2
+  execute_code: false
+  timeout_seconds: 600
+
+qc_profiles:
+  pbmc:
+    pct_mt_note: "外周血线粒体通常较低，先看分布再定阈值，常见起点约 5–10%。"
+    extra_qc: ["hb"]
+  tumor:
+    pct_mt_note: "肿瘤/高代谢组织线粒体可偏高；过度过滤会丢掉真实生物学（Yates 2025）。"
+    extra_qc: []
+  brain:
+    pct_mt_note: "脑组织 ambient RNA 与线粒体分布需一起看，避免固定 5% cutoff。"
+    extra_qc: []
+  heart:
+    pct_mt_note: "心肌细胞线粒体天然偏高，MAD 阈值应放宽并在报告中声明。"
+    extra_qc: []
+  default:
+    pct_mt_note: "不套固定 cutoff。先看 violin / scatter / barcode rank，再用 MAD。"
+    extra_qc: []
