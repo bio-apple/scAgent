@@ -1,5 +1,7 @@
 # Single-Cell RNA-seq Analysis Agent
 
+> **Languages:** 中文（本文） | [English](README.en.md)
+
 LangGraph 单细胞生信智能体。相对 CellAgent / 泛用 SciAgent-Skills，这里强制 **组织感知 QC + 执行结果审查 + 可审计脚本**（不只是生成教程代码）。
 
 现有 SciAgent-style skills **原样保留**。RAG 默认检索 `knowledge/papers`，并索引 `best_practices/`（`reference/` 步骤摘要 + `update-kb` 拉取的 sc-best-practices）以及 `knowledge/sops/`（实验室 SOP）。
@@ -28,47 +30,148 @@ Demo 是 100 细胞稀疏 `.h5ad`（`tests/data/tiny_100cells.h5ad`），供 CI 
 
 ## 工作流
 
+### 系统架构总览
+
+下图从**分层**视角展示 scAgent 各模块如何协作：数据进入后先 inspect 与 Planner 编排；四个专职 Agent 只产出**分析策略与协议**（不写可执行代码）；Code Audit 统一生成脚本并按 **Tool Router（R 优先）** 执行；Reviewer 把关后 Writer 汇总报告。
+
 ```mermaid
-flowchart TD
-  subgraph in [输入]
-    D["h5ad / loom / 10x / Cell Ranger outs / Seurat rds"]
-    Q[用户任务]
+flowchart TB
+  subgraph input ["① 数据输入"]
+    F["h5ad · loom · 10x · Cell Ranger outs · Seurat .rds"]
+    U["用户任务 + CLI 参数"]
   end
-  D --> IO["scagent.io 稀疏 CSR / 大图 backed"]
-  Q --> INS[inspect]
+
+  subgraph ingest ["② 理解与编排"]
+    IO["scagent.io\nCSR / backed / 多样本拼接"]
+    INS["inspect\n物种 · 批次 · 条件 · n_replicates"]
+    PL["Planner\n意图 · DAG · skills · tool_route"]
+    TR["Tool Router\nR 优先 → Python 降级"]
+  end
+
+  subgraph agents ["③ 四个专职 Agent（只编排，不跑代码）"]
+    direction LR
+    A1["QC & Preprocessing\nMAD · 双细胞 · ambient · HVG · PCA"]
+    A2["Clustering & Differential\nLeiden · 注释证据 · marker · pseudobulk DEG"]
+    A3["Biological Interpretation\nGSEA / ORA · 文献 RAG"]
+    A4["Code Audit & Execution\n模板/LLM → schema → 执行 · 自修复"]
+  end
+
+  subgraph exec ["④ 执行与审查"]
+    RPATH["Rscript\nSeurat · Harmony · Azimuth · …"]
+    PPATH["Python\nScanpy · CellTypist+scANVI · …"]
+    REV["Reviewer\n阶段审查 + 发表级卡片"]
+  end
+
+  subgraph output ["⑤ 输出"]
+    W["Writer / dual / notebook"]
+    O["report.md · dual.md · analysis.ipynb · viewer.html"]
+  end
+
+  F --> IO
+  U --> PL
   IO --> INS
-  INS --> PL[Planner 编排 DAG + 分工]
-  PL -->|language=r| RP[Reviewer 发表级卡片]
-  PL --> HITL1[HITL 线粒体直方图+选项]
-  HITL1 -->|interrupt 未确认| RP
-  HITL1 --> QC[QC and Preprocessing Agent]
-  QC --> CAQ[Code Audit QC 生成+Jupyter执行]
-  CAQ --> RQ[reviewer 代码+执行]
-  RQ -->|失败重试| CAQ
-  RQ -->|qc-only| RP
-  RQ --> HITL2[HITL resolution 直方图+选项]
-  HITL2 -->|interrupt 未确认| RP
-  HITL2 --> CD[Clustering and Differential Agent]
-  CD --> CAD[Code Audit cluster/DEG]
-  CAD --> RD[reviewer]
-  RD -->|失败重试| CAD
-  RD --> BI[Biological Interpretation Agent]
-  BI --> CAI[Code Audit GSEA/ORA]
-  CAI --> RP
-  RP --> W[Publication Report]
-  W --> OUT["outputs/report.md + dual.md + analysis.ipynb"]
+  INS --> PL
+  PL --> TR
+  TR --> A1 & A2 & A3
+  A1 & A2 & A3 --> A4
+  A4 --> RPATH
+  A4 --> PPATH
+  RPATH --> REV
+  PPATH --> REV
+  REV --> W --> O
 ```
 
-工作流是 **Planner（只编排）→ 四个专职 Agent → Publication Report**。
+| 层级 | 模块 | 作用 |
+|------|------|------|
+| 数据输入 | `scagent.io` | 统一读入多格式，大图 backed、多样本 `obs['sample']` |
+| 理解与编排 | inspect + Planner | 检测批次/条件/重复数，生成 DAG、skills、整合与 DEG 策略 |
+| Tool Router | `scagent/tool_router` | SciAgent 默认：**R 生态优先**，缺包则 Scanpy 降级 |
+| 专职 Agent | QC / Cluster / Interpret | 输出协议与参数，**不直接执行**分析 |
+| 执行 | Code Audit | 生成 `workspace/*.py`，Jupyter 或 Rscript 跑通并写 metrics |
+| 审查 | Reviewer | 代码 AST/DAG + 执行结果 + 发表级 checklist |
+| 输出 | Writer | 只读 `artifacts`，缺图写「未执行」 |
 
-| Agent | 职责 |
-|-------|------|
-| QC & Preprocessing | 数据校验、清洗、HVG、PCA |
-| Clustering & Differential | Leiden、注释证据、marker、DEG |
-| Biological Interpretation | 通路富集（GSEA/GSVA 或 ORA）+ 本地文献 RAG |
-| Code Audit & Execution | 指令→可执行代码、schema 拦截、Jupyter 执行、失败自修复 |
+---
 
-阶段 Reviewer 同时看 **代码** 和 **execution**；发表级 Reviewer 再汇总 QC / marker / DEG / 图 / 批次校正。Writer 只根据 `artifacts` 写报告，缺图写「未执行」。
+### 端到端流程（含 HITL 与重试）
+
+```mermaid
+flowchart TD
+  START([用户: scagent run]) --> IN
+
+  subgraph IN ["输入"]
+    D["数据路径"]
+    Q["自然语言任务"]
+  end
+
+  D --> IO["io.read_single_cell"]
+  Q --> INS["inspect 元数据"]
+  IO --> INS
+
+  INS --> PL["Planner\n· 解析意图 → route/DAG\n· tool_route 选 R/Python\n· 分配四个 Agent 职责"]
+
+  PL -->|language=r 仅 Rmd| RMD["export Rmd\n不执行 kernel"]
+  PL --> H1{"HITL\n线粒体阈值?"}
+
+  H1 -->|interrupt 待确认| RP
+  H1 --> QC["① QC Agent\n策略: MAD/双细胞/ambient"]
+
+  QC --> CAQ["Code Audit QC\n生成 qc_preprocess.py"]
+  CAQ --> RQC{"Tool Router\nSeurat?"}
+  RQC -->|R 成功| M1["adata_qc.h5ad"]
+  RQC -->|降级| M1
+  CAQ --> EXQ["Jupyter 执行"]
+  EXQ --> M1
+  M1 --> RQ["Reviewer QC"]
+  RQ -->|失败 ≤N 次| CAQ
+  RQ -->|qc-only| RP
+
+  RQ --> H2{"HITL\nresolution?"}
+  H2 -->|interrupt| RP
+  H2 --> CD["② Cluster & DEG Agent\nLeiden · 注释 · marker · pseudobulk"]
+
+  CD --> CAD["Code Audit downstream\ncluster_annotate.py"]
+  CAD --> RDN{"Tool Router\nAzimuth/Harmony?"}
+  RDN -->|R 成功| M2["adata_processed.h5ad"]
+  RDN -->|降级 Scanpy| M2
+  CAD --> EXD["Jupyter 执行"]
+  EXD --> M2
+  M2 --> RD["Reviewer downstream"]
+  RD -->|失败 ≤N 次| CAD
+
+  RD --> BI["③ Interpret Agent\nGSEA/ORA 计划"]
+  BI --> CAI["Code Audit interpret"]
+  CAI --> EXI["执行富集"]
+  EXI --> RP["④ Publication Reviewer\nQC/marker/DEG/图/批次"]
+
+  RP --> W["Writer"]
+  W --> OUT["outputs/report.md\ndual.md · analysis.ipynb · memory.yaml"]
+  RMD --> OUT
+
+  style PL fill:#e8f4fc
+  style QC fill:#fff4e6
+  style CD fill:#fff4e6
+  style BI fill:#fff4e6
+  style CAQ fill:#e8fce8
+  style CAD fill:#e8fce8
+  style CAI fill:#e8fce8
+  style RP fill:#fce8f3
+```
+
+**图例**：蓝色 = 编排；橙色 = 领域专家 Agent；绿色 = 代码生成与执行；粉色 = 发表级审查。
+
+工作流本质是 **Planner（只编排）→ 四个专职 Agent 出策略 → Code Audit 统一落地 → Publication Report**。
+
+| Agent | 职责 | 典型产出 |
+|-------|------|----------|
+| QC & Preprocessing | 数据校验、MAD/双细胞/ambient、HVG、PCA | `qc_strategy`、LOCKED QC 块 |
+| Clustering & Differential | Leiden、CellTypist+scANVI/Azimuth、marker 双验证、pseudobulk DEG | `annotation_plan`、`cluster_annotate.py` |
+| Biological Interpretation | 通路富集（GSEA/GSVA/ORA）+ 本地 RAG | `interpretation_plan` |
+| Code Audit & Execution | 策略→可执行代码、schema/DAG 拦截、Rscript/Jupyter、失败自修复 | `workspace/*.py`、`run_manifest.json` |
+
+阶段 Reviewer 同时审查 **代码** 与 **execution**（metrics、`SCAGENT_WARN`）；发表级 Reviewer 汇总 QC / marker / DEG / 图 / 批次校正。Writer **只**根据 `artifacts` 写报告，未 `--execute` 时标明「未执行」。
+
+**Checkpoint**：LangGraph SQLite 保存 AgentState；h5ad 快照在 `.cache/snapshots/`，可用 `--resume` 续跑。
 
 ## 安装
 
@@ -109,14 +212,14 @@ python -m scagent run "对 PBMC 做标准分析并注释" --data /path/to/data.h
 workspace/qc_preprocess.py
 workspace/cluster_annotate.py
 workspace/reproducible_script.py
-workspace/run_manifest.json      # scAgent 版本、种子、skill fingerprint、数据路径哈希前缀
+workspace/run_manifest.json      # scAgent 版本、种子、skill fingerprint、环境 hash、step I/O provenance
 outputs/report.md
 outputs/report.html              # Markdown 转义 + 嵌入 figures
 outputs/run_log.json             # 过滤统计、参数、skills、issue_records
 outputs/memory.yaml              # 分析 provenance：步骤+参数，不是聊天；失败用 --from-checkpoint
-outputs/dual.md                  # 每阶段 [结论] + [代码]
+outputs/dual.md                  # 每阶段 [结论] + [代码]；文末含发表级图表清单
 outputs/analysis.ipynb           # 结论 cell + Scanpy 代码 cell；Jupyter 后台执行（R 为 analysis.Rmd / Seurat）
-outputs/viewer.html              # Plotly 交互 UMAP：框选/套索细胞后提问
+outputs/viewer.html              # Plotly 交互 UMAP：框选/套索细胞后提问；侧栏发表级主图链接
 ```
 
 未 `--execute` 时报告会写明图未生成。真跑：
@@ -147,9 +250,16 @@ performance:
   n_jobs: -1
   backed_threshold_cells: 250000
   cache: true   # 中间结果 .cache/
+  dask:
+    enabled: false              # 实验性 Dask/out-of-core（≥ threshold_cells 时 backed + scagent_dask）
+    threshold_cells: 500000
+  gpu:
+    enabled: false              # CUDA 可用时 scVI GPU；rapids=true 需 rapids-singlecell
+    scvi: true
+    rapids: false
 ```
 
-CLI `--resolution` 覆盖 `params.leiden_resolution`。日志走 `logging`（INFO/DEBUG/ERROR + 节点耗时），生成脚本里的 `SCAGENT_METRICS:` / `SCAGENT_WARN:` 仍是 stdout 协议，给 reviewer 解析。
+CLI `--resolution` 覆盖 `params.leiden_resolution`。`run_manifest.json` 强制记录：`environment.hash`（pip freeze / conda export / package_versions）、`seed_propagation`（HVG/Leiden/UMAP 等统一种子）、`step_provenance`（各步 AnnData shape 与 obs/var 列）。日志走 `logging`（INFO/DEBUG/ERROR + 节点耗时），生成脚本里的 `SCAGENT_METRICS:` / `SCAGENT_WARN:` 仍是 stdout 协议，给 reviewer 解析。
 
 ## Notebook / 程序化 API
 
@@ -208,6 +318,8 @@ inspect 阶段会：
 
 ## CLI
 
+> 完整英文参数说明见 [README.en.md § CLI reference](README.en.md#cli-reference)。运行 `python -m scagent --help` 或 `python -m scagent run --help` 亦可查看英文 `--help`。
+
 | 参数 | 作用 |
 |------|------|
 | `scagent init` | 交互式配置向导：数据路径、组织、任务、资源限制；`--yes` 用默认值 |
@@ -246,24 +358,50 @@ python -m scagent skills
 | `--integrator auto\|none\|harmony\|scvi\|cca\|scanorama\|bbknn` | 批次模块。inspect 检测到批次后 auto 触发。`cca`/`scanorama` 为 Scanorama；`bbknn` 改邻居图（缺包回退 Harmony） |
 | `--impute none\|magic\|alra` | Dropout 插补，写入 `layers['imputed']`，不覆盖用于 DE 的 X |
 | `--ambient auto\|none\|soupx\|decontx` | Ambient RNA。brain/tumor 的 `auto` 走 SoupX 风格校正，不只是警告 |
-| `--remove-doublets` | 按两法共识 `predicted_doublet` 过滤 |
+| `--remove-doublets` | 按 `doublet_filter` 过滤双细胞（默认仅高置信） |
+| `--doublet-filter high_conf\|all` | `high_conf`=保守（仅移除高置信）；`all`=严格（高+低均移除） |
 | `--doublet-methods auto\|scrublet\|both` | `auto`：多样本/复杂组织 Scrublet+scDblFinder（无 R 则表达模拟） |
 | `--condition-key` | 组间比较列；触发 sample-level pseudobulk DE |
 | `--deg-engine auto\|edger\|deseq2\|ttest` | 组间 DEG 后端。`auto`：rpy2 edgeR → DESeq2 → Rscript → t-test+BH。任务描述里写 DESeq2 等也会被识别 |
 | `--marker-method auto\|wilcoxon\|t-test\|mast` | 探索性 cluster marker |
 | `--deg-cross-validate auto\|on\|off` | 第二检验交叉验证基因列表 |
 | `--qc-method mad\|percentile\|hybrid` | 动态阈值；`config.qc.hard` 为 null 时不套 mito%<5 |
+| `--dask` | 实验性 Dask/out-of-core 大图路径 |
+| `--gpu` | CUDA 可用时为 scVI 启用 GPU |
+| `--rapids` | RAPIDS neighbors/UMAP（需 rapids-singlecell） |
 
 把 PDF 放入 `knowledge/papers/` 后重新 `ingest`。`scagent update-kb` 从 [theislab/single-cell-best-practices](https://github.com/theislab/single-cell-best-practices) 拉取最新章节到 `best_practices/upstream/` 并重建索引。实验室 SOP：`scagent add-doc <path>`，写入 `knowledge/sops/`。步骤级摘要仍在 `best_practices/reference/`。自定义 marker CSV 列：`cell_type,positive,negative,lineage`（`;` 分隔）。
 
+## Tool Router（R 优先）
+
+与 SciAgent 原生路由一致：**Always use R ecosystem first. Only invoke Python when R lacks the required functionality.**
+
+| 功能 | R 默认 | Python 备用 |
+|------|--------|-------------|
+| QC / Normalize | Seurat | Scanpy |
+| Integration | Harmony (R) | harmonypy / scVI / Scanorama |
+| Annotation | Azimuth | CellTypist + scANVI → `scagent_annotation` |
+| Trajectory | Monocle3 | DPT / PAGA / Palantir / scVelo |
+| CellChat | CellChat (R) | — |
+| Spatial | Giotto | Squidpy |
+
+配置见 `config.yaml` → `tool_router` + `analysis.language`：
+
+- **`r_first`**（默认）：模板开头尝试 `Rscript scagent/r/pipeline_*.R`；失败则 `SCAGENT_WARN` 并走 Scanpy
+- **`python`**：始终 Scanpy
+- **`r`**：legacy，仅写 `analysis.Rmd`，不在 scAgent 内执行
+
+强制 Python 降级：`SCAGENT_FORCE_PYTHON=1 python -m scagent run …`
+
 ## 设计选择
 
-- **Skills**：不拆成 `skills/R` 与 `skills/python`。fingerprint 写入 `run_manifest.json`。
+- **Skills**：不拆成 `skills/R` 与 `skills/python`。fingerprint 写入 `run_manifest.json`。内置 **142** 个单细胞 skill：保留原有 10 个 SciAgent core，并从 [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) 同步 **144** 条 `bioskill_index_v3.csv` 单细胞索引（去重后 132 新增；清单见 `skills/awesome_single_cell_manifest.json`）。Planner 按任务关键词推荐子集；`python -m scagent skills` 列出全部。
 - **版本兼容**：`run_manifest.json` 写入 `scagent_version`。`--resume` 时对照当前包版本：主版本变更拒绝续跑（分析脚本/schema 可能不兼容），次版本警告，`--force-resume` 可覆盖。无版本字段的旧 manifest 警告后继续。
 - **整合**：可选模块。inspect 扫描 `sample`/`batch`/`donor`/`orig.ident`/`library_id` 等列，或把 `--data` 的多个路径当作多样本。检测到 ≥2 批次且与条件非 1:1 共线时，**auto 自动校正**。默认 Harmony；≥10 万细胞或 ≥8 样本改 scVI。`--integrator none` 可关；`cca`/`scanorama`=Scanorama，`bbknn` 改邻居图。样本与条件 1:1 共线时跳过，避免把处理效应当批次抹掉。报告写决策理由、校正前后 PCA/UMAP 批次着色，以及 iLISI/kBET/PCA-R²；**禁止把 UMAP 混匀当整合成功**。
 - **HVG**：默认 `flavor=seurat_v3` 在 `layers['counts']` 上选，多样本按 batch 取并集（Heumos 2023）。无 counts 则回退 `seurat`。PCA `use_highly_variable=True`。探索性 Wilcoxon 强制 `use_raw`，不在 scale 后的 X 上做。
-- **QC**：MAD / percentile / hybrid，组织 profile 可改 `nmads`。禁止默认 mito%<5。双细胞：Scrublet；多样本/复杂组织再交叉验证 scDblFinder（无 R 则表达模拟），两法一致才标 `predicted_doublet`。脑/肿瘤默认 ambient 校正；细胞周期评分，`regress_cell_cycle: auto`。
-- **注释**：CellTypist 假说 + cluster DE∩catalog + marker 双验证，`fuse_annotation` 多数表决。禁止只调用 Azimuth；冲突标 `mixed`。
+- **QC**：MAD / percentile / hybrid，组织 profile 可改 `nmads`。禁止默认 mito%<5。双细胞：Scrublet；多样本/复杂组织再交叉验证 scDblFinder（无 R 则表达模拟），写入三级 `doublet_call`（`doublet_high_conf` / `doublet_low_conf` / `singlet`）。`--remove-doublets` + `doublet_filter` 可选保守（仅高置信）或严格（高+低）过滤。脑/肿瘤默认 ambient 校正；细胞周期评分，`regress_cell_cycle: auto`。
+- **注释**：CellTypist + scANVI 集成（`max_prob < 0.8` 自动 scANVI 后备 → `obs['scagent_annotation']`）+ marker 双验证 + `fuse_annotation` 多数表决。
+- **组间 DEG**：`--condition-key` 且每条件 ≥2 个生物学重复时，**强制** sample-level pseudobulk + DESeq2/edgeR；禁止 cell-level Wilcoxon 作组间结论（cluster marker 探索性 Wilcoxon 仍可用）。
 - **轨迹 / 命运**：聚类后评估 PAGA 是否像连续分化。支持则拟合 **DPT+PAGA** 分化轴与基因趋势图；已装 **Palantir** 则一并跑；**scVelo** 仅在 `spliced`/`unspliced` 层存在时运行；**Monocle3** 走可选 Rscript。离散 PBMC 不强行画命运轴。`modules.trajectory`: auto | force | off。
 - **DE**：探索性 cluster marker 默认 Wilcoxon，可在任务中指定 **t-test / MAST / DESeq2 / edgeR**。组间比较按 sample × cell type 加和 raw counts（edgeR QL / DESeq2 / t-test+BH），**不用**细胞水平 Wilcoxon/MAST 当结论。默认跑第二检验做基因列表交叉验证（overlap/Jaccard 写入 metrics，Reviewer 会读）。`--deg-engine` / `--marker-method` / `--deg-cross-validate` 或 `config.deg.*` 可固定。MAST 需 R 包，缺则跳过。
 - **整合评估**：优先 scIB iLISI/kBET，否则 kNN-iLISI 与 PCA 批次 R²；不再只靠 cluster 主导批次比例。Reviewer 还会生成校正前后 PCA/UMAP 批次着色诊断图，并嵌入 Publication Report；UMAP 混匀不是整合成功的证据。
@@ -299,4 +437,4 @@ pytest -q
 
 有 scanpy/anndata 时会跑小型合成 h5ad 的 QC 执行测试。Push/PR 走 GitHub Actions（pytest + flake8 + black）。
 
-Skills 参考：[SciAgent-Skills single-cell](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell)。仓库还收录 legacy [`single-cell-annotation`](https://github.com/jaechang-hits/SciAgent-Skills/blob/main/legacy/single-cell-annotation/SKILL.md)（`skills/single-cell-annotation/`）与 [`cellchat-cell-communication`](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/systems-biology-multiomics/cellchat-cell-communication)（`skills/cellchat-cell-communication/`，R/Seurat 配体-受体网络；需先完成注释）。
+Skills 参考：原有 [SciAgent-Skills single-cell](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell)（10 个 core skill 原样保留）；并 vendor [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) 的 **Single-Cell Analysis** 全部分类（144 索引 → 142 目录，`scripts/sync_awesome_single_cell_skills.py` 可重同步）。legacy [`single-cell-annotation`](https://github.com/jaechang-hits/SciAgent-Skills/blob/main/legacy/single-cell-annotation/SKILL.md) 与 [`cellchat-cell-communication`](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/systems-biology-multiomics/cellchat-cell-communication) 仍在 `skills/` 下。

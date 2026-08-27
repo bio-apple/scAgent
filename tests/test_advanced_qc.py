@@ -24,7 +24,7 @@ def test_qc_writes_predicted_doublet_and_cell_cycle():
     )
     compile(code, "<qc_adv>", "exec")
     assert "detect_doublets" in code
-    assert "predicted_doublet" in code
+    assert "doublet_call" in code or "DOUBLET_FILTER" in code
     assert "REMOVE_DOUBLETS = True" in code
     assert "cell_cycle_score" in code
     assert "scrublet skipped" not in code

@@ -123,7 +123,14 @@ def _prereq_ok(idx: dict[str, int], step: str, need: str) -> bool:
     return need in idx and idx[need] < here
 
 
-def validate_script(code: str | None, *, phase: str = "downstream", language: str = "python") -> dict[str, Any]:
+def validate_script(
+    code: str | None,
+    *,
+    phase: str = "downstream",
+    language: str = "python",
+    metadata: dict | None = None,
+    plan: dict | None = None,
+) -> dict[str, Any]:
     """Return ok/issues. QC only checks syntax + no DE/DPT. Downstream enforces the analysis DAG."""
     text = code or ""
     records: list[dict] = []
@@ -179,6 +186,26 @@ def validate_script(code: str | None, *, phase: str = "downstream", language: st
             )
         else:
             _add(records, f"步骤 {step} 缺少前提 {missing}", id="schema.dag")
+
+    from scagent.deg_methods import force_pseudobulk_de
+
+    meta = metadata or {}
+    pl = plan or {}
+    if phase == "downstream" and force_pseudobulk_de(meta, pl):
+        ck = str(meta.get("condition_key") or pl.get("condition_key") or "condition")
+        if "pseudobulk_de" not in text:
+            _add(
+                records,
+                f"强制 pseudobulk：存在 {ck!r} 且 n_replicates≥2，但脚本未调用 pseudobulk_de",
+                id="schema.force_pseudobulk_missing",
+            )
+        pat = rf"rank_genes_groups\s*\([^)]*groupby\s*=\s*['\"]?{re.escape(ck)}"
+        if re.search(pat, text, re.I):
+            _add(
+                records,
+                f"禁止对条件列 {ck!r} 做 cell-level rank_genes_groups；组间 DE 须 pseudobulk + DESeq2/edgeR",
+                id="schema.force_pseudobulk_wilcoxon",
+            )
 
     ok = ast_ok and not any(r.get("severity") == "fail" for r in records)
     return {

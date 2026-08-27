@@ -6,8 +6,12 @@ from agents.reviewer import audit_code, publication_review
 from agents.templates import qc_preprocess_script
 from scagent.demo import write_tiny_h5ad
 from scagent.doublets import (
+    TIER_HIGH,
+    TIER_LOW,
+    TIER_SINGLET,
     _consensus,
     _simulate_doublet_scores,
+    assign_doublet_tiers,
     detect_doublets,
     expected_doublet_rate,
     resolve_doublet_methods,
@@ -37,6 +41,39 @@ def test_consensus_intersection_and_discordant():
     assert agree == pytest.approx(0.5)
 
 
+def test_assign_doublet_tiers_dual_method():
+    calls = {
+        "scrublet": np.array([True, True, False, True, False]),
+        "sim": np.array([True, False, True, True, False]),
+    }
+    scores = {
+        "scrublet": np.array([0.9, 0.7, 0.1, 0.6, 0.2]),
+        "sim": np.array([0.85, 0.3, 0.5, 0.75, 0.1]),
+    }
+    tiers, counts = assign_doublet_tiers(calls, scores)
+    assert tiers.tolist() == [TIER_HIGH, TIER_LOW, TIER_LOW, TIER_LOW, TIER_SINGLET]
+    assert counts[TIER_HIGH] == 1
+    assert counts[TIER_LOW] == 3
+    assert counts[TIER_SINGLET] == 1
+
+
+def test_assign_doublet_tiers_scrublet_only():
+    calls = {"scrublet": np.array([True, True, False])}
+    scores = {"scrublet": np.array([0.9, 0.5, 0.1])}
+    tiers, counts = assign_doublet_tiers(calls, scores)
+    assert tiers.tolist() == [TIER_HIGH, TIER_LOW, TIER_SINGLET]
+    assert counts[TIER_HIGH] == 1
+    assert counts[TIER_LOW] == 1
+
+
+def test_removal_mask_respects_filter():
+    from scagent.doublets import _removal_mask
+
+    tiers = np.array([TIER_HIGH, TIER_LOW, TIER_SINGLET])
+    assert _removal_mask(tiers, doublet_filter="high_conf").tolist() == [True, False, False]
+    assert _removal_mask(tiers, doublet_filter="all").tolist() == [True, True, False]
+
+
 def test_count_simulation_on_tiny_h5ad(tmp_path):
     pytest.importorskip("sklearn")
     pytest.importorskip("anndata")
@@ -53,6 +90,7 @@ def test_count_simulation_on_tiny_h5ad(tmp_path):
     assert info["status"] in {"ok", "partial"}
     assert "sim" in info["methods"] or "scdblfinder" in info["methods"]
     assert "predicted_doublet" in out.obs
+    assert "doublet_call" in out.obs
     assert "doublet_discordant" in out.obs
 
 
@@ -73,7 +111,7 @@ def test_qc_template_crosscheck_for_tumor():
 def test_qc_strategy_multi_sample_requests_crosscheck():
     s = build_qc_strategy({"metadata": {"tissue": "pbmc", "n_samples": 4, "need_batch_correction": True}})
     assert s["doublet_methods_resolved"] == ["scrublet", "scdblfinder"]
-    assert "交叉验证" in (s.get("protocol") or "")
+    assert "scDblFinder" in (s.get("protocol") or "") or "doublet_call" in (s.get("protocol") or "")
 
 
 def test_publication_mentions_crosscheck_when_both_engines():
@@ -87,6 +125,8 @@ def test_publication_mentions_crosscheck_when_both_engines():
                     "doublet_rate": 0.03,
                     "doublet_agreement": 0.91,
                     "doublet_methods": ["scrublet", "sim"],
+                    "doublet_n_high_conf": 12,
+                    "doublet_n_low_conf": 8,
                 }
             },
             "metadata": {"n_samples": 1},
@@ -94,4 +134,4 @@ def test_publication_mentions_crosscheck_when_both_engines():
     )
     by_key = {i["key"]: i for i in card["items"]}
     assert by_key["doublet_detection"]["status"] == "pass"
-    assert "交叉验证" in by_key["doublet_detection"]["detail"]
+    assert "doublet_call" in by_key["doublet_detection"]["detail"] or "high=" in by_key["doublet_detection"]["detail"]

@@ -61,6 +61,29 @@ def resolve_cross_validate(raw: Any, *, explicit: bool | None = None) -> bool:
     return True
 
 
+def force_pseudobulk_de(meta: dict | None, plan: dict | None = None) -> bool:
+    """True when condition comparison must use sample-level pseudobulk (not cell-level Wilcoxon)."""
+    plan = plan or {}
+    meta = meta or {}
+    ck = meta.get("condition_key") or plan.get("condition_key")
+    if not ck:
+        return False
+    if plan.get("force_pseudobulk_de") is True:
+        return True
+    n_rep = meta.get("n_replicates")
+    if n_rep is None:
+        n_rep = meta.get("n_samples")
+    return int(n_rep or 0) >= 2
+
+
+def resolve_forced_deg_engine(engine: str | None) -> str:
+    """When pseudobulk is forced, prefer DESeq2/edgeR over t-test."""
+    eng = str(engine or "auto").lower().strip()
+    if eng in {"ttest", "t-test", "wilcoxon", "mast"}:
+        return "auto"
+    return eng or "auto"
+
+
 def alt_scanpy_method(primary: str) -> str:
     return "t-test" if primary == "wilcoxon" else "wilcoxon"
 

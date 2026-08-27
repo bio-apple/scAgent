@@ -2,7 +2,7 @@ from agents.planner import choose_integrator
 from agents.reviewer import audit_code, audit_execution, format_review_card, publication_review
 from agents.templates import LOCKED_START, cluster_annotate_script, qc_preprocess_script, scanpy_script
 from scagent.inspect_data import detect_platform, detect_species_from_genes, gene_composition, inspect_data
-from scagent.skills_loader import list_skills, recommend_skills
+from scagent.skills_loader import awesome_manifest, list_skills, recommend_skills, skill_catalog_text
 
 
 def test_existing_skills_preserved():
@@ -34,6 +34,25 @@ def test_recommend_cellchat_for_communication_query():
     skills = recommend_skills({"tissue": "tumor", "task": "CellChat 分析肿瘤与 T 细胞的配体受体通讯"})
     assert "cellchat-cell-communication" in skills
     assert "scanpy-scrna-seq" in skills
+
+
+def test_awesome_single_cell_skills_imported():
+    manifest = awesome_manifest()
+    assert manifest is not None
+    assert manifest["total_indexed"] == 144
+    assert manifest["imported"] >= 120
+    assert len(list_skills()) >= 140
+
+
+def test_recommend_spatial_skills():
+    skills = recommend_skills({"task": "Visium 空间转录组 deconvolution", "tissue": "brain"})
+    assert "spatial-transcriptomics" in skills
+
+
+def test_skill_catalog_is_bounded():
+    text = skill_catalog_text(metadata={"task": "PBMC QC clustering"}, query="标准 PBMC 分析", limit=48)
+    assert text.count("- ") <= 48
+    assert "另有" in text or len(list_skills()) <= 48
 
 
 def test_choose_integrator():
@@ -74,7 +93,7 @@ def test_qc_template_passes_reviewer():
     assert 'side="high"' in code
     assert "detect_doublets" in code
     assert "scrublet" in code.lower()
-    assert "predicted_doublet" in code
+    assert "doublet_call" in code or "DOUBLET_FILTER" in code
     assert "select_hvg" in code
     assert "filter_genes" in code
     r = audit_code(code, meta, phase="qc")

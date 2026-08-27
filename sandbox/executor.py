@@ -31,16 +31,24 @@ def check_packages(names: tuple[str, ...] = REQUIRED_PACKAGES) -> list[str]:
 
 
 def write_manifest(workspace: Path, extra: dict) -> Path:
-    payload = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+    from scagent.reproducibility import enrich_run_manifest
+
+    seed = analysis_params()["seed"]
+    payload_extra = {
         "python": sys.version,
         "skills_fingerprint": skills_fingerprint(),
-        "seed": analysis_params()["seed"],
+        "seed": seed,
         **extra,
         "scagent_version": scagent_version(),
     }
     path = workspace / "run_manifest.json"
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    if path.is_file():
+        try:
+            prev = json.loads(path.read_text(encoding="utf-8"))
+            payload_extra = {**prev, **payload_extra}
+        except json.JSONDecodeError:
+            pass
+    enrich_run_manifest(path, extra=payload_extra)
     return path
 
 
@@ -226,6 +234,22 @@ def write_and_maybe_run(
     metrics, warns = parse_metrics(result["stdout"], result["stderr"])
     result["metrics"] = metrics
     result["warnings"] = warns
+    if result.get("executed"):
+        try:
+            from scagent.reproducibility import enrich_run_manifest
+
+            enrich_run_manifest(
+                workspace / "run_manifest.json",
+                extra={
+                    "phase": phase or filename,
+                    "metrics": metrics,
+                    "data_path": extra_manifest.get("data_path"),
+                    "executed": True,
+                    "returncode": result.get("returncode"),
+                },
+            )
+        except Exception as exc:
+            log.warning("run_manifest provenance enrich failed: %s", exc)
     if result["ok"] and sb.get("enabled", True):
         from scagent.config import analysis_params as _aparams
 

@@ -38,7 +38,7 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
     has_pseudobulk_impl = "pseudobulk_de" in low or "get.aggregate" in low or "sc.get.aggregate" in low
     has_ref2 = any(k in low for k in ("ref2_label", "singler", "popv", "second_reference", "ref_crossval", "deg_label", "cluster_deg"))
     has_fusion = "fuse_annotation" in low or "annotation_n_agree" in low or "annotation_fusion" in low
-    has_predicted_doublet = "predicted_doublet" in low
+    has_predicted_doublet = "predicted_doublet" in low or "doublet_call" in low
     has_padj = "pvals_adj" in low or "padj" in low or "fdr" in low
     tissue = str((metadata or {}).get("tissue") or "").lower()
     ct_model = choose_celltypist_model(tissue, (metadata or {}).get("species"))
@@ -59,7 +59,7 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
         if re.search(r"pct[_]?mt\s*[<>=]+\s*(5|10)\b", low):
             _add(records, "使用了固定 pctMT=5/10 阈值，应改为看分布 + MAD/percentile", id="qc.hard_mt")
         if not has_predicted_doublet and "detect_doublets" not in low and "scrublet" not in low:
-            _add(records, "QC 缺少双细胞检测（Scrublet / detect_doublets / predicted_doublet）", id="qc.doublet")
+            _add(records, "QC 缺少双细胞检测（Scrublet / detect_doublets / doublet_call）", id="qc.doublet")
         if "scrublet skipped" in low and "predicted_doublet" not in low:
             _add(records, "Scrublet 被跳过且未写入 predicted_doublet", id="qc.doublet_skip")
         n_samp = int((metadata or {}).get("n_samples") or 1)
@@ -337,20 +337,28 @@ def publication_review(state: dict) -> dict:
     engine_txt = "+".join(str(e) for e in engines) if engines else ""
     if "scrublet skipped" in warns or dstat == "failed":
         items.append(_item("doublet_detection", "missing" if dstat != "failed" else "fail", "双细胞检测未成功"))
-    elif "predicted_doublet" in text or "scrublet" in text or "scdblfinder" in text or "detect_doublets" in text:
+    elif "predicted_doublet" in text or "doublet_call" in text or "scrublet" in text or "scdblfinder" in text or "detect_doublets" in text:
         rate = mets.get("doublet_rate")
         if rate is not None and float(rate) > 0.10:
             items.append(_item("doublet_detection", "fail", f"doublet_rate={float(rate):.1%}"))
         elif len(engines) >= 2 or ("detect_doublets" in text and ("scdblfinder" in text or "simulation" in text or "both" in text)):
             agree = mets.get("doublet_agreement")
-            detail = "Scrublet ∩ 第二方法交叉验证"
+            n_hi = mets.get("doublet_n_high_conf")
+            n_lo = mets.get("doublet_n_low_conf")
+            detail = "Scrublet + 第二方法 → doublet_call 三级"
+            if n_hi is not None:
+                detail += f" high={n_hi} low={n_lo}"
             if agree is not None:
                 detail += f" agreement={agree}"
             if engine_txt:
                 detail += f" ({engine_txt})"
             items.append(_item("doublet_detection", "pass", detail))
         else:
-            items.append(_item("doublet_detection", "pass", "Scrublet → predicted_doublet"))
+            n_hi = mets.get("doublet_n_high_conf")
+            detail = "Scrublet → doublet_call 分级"
+            if n_hi is not None:
+                detail += f" high={n_hi} low={mets.get('doublet_n_low_conf')}"
+            items.append(_item("doublet_detection", "pass", detail))
     else:
         items.append(_item("doublet_detection", "missing", "未检测到双细胞检测"))
 
@@ -393,21 +401,35 @@ def publication_review(state: dict) -> dict:
     if not executed:
         items.append(_item("figures", "missing", "未执行，图未生成"))
     else:
-        need_violin = bool(state.get("code_qc"))
-        need_umap = bool(state.get("code_downstream"))
-        missing_fig = []
-        if need_violin and "violin" not in fig_names:
-            missing_fig.append("violin")
-        if need_violin and "scatter" not in fig_names:
-            missing_fig.append("scatter")
-        if need_umap and "umap" not in fig_names and "overview" not in fig_names:
-            missing_fig.append("umap")
-        if need_batch and not _has_batch_diagnostic(artifacts, mets):
-            missing_fig.append("batch_pca/umap")
-        if missing_fig:
-            items.append(_item("figures", "fail", "缺图: " + ", ".join(missing_fig)))
+        from scagent.publication_figures import build_publication_figure_inventory
+
+        pub = build_publication_figure_inventory(state)
+        if pub["n_missing"]:
+            items.append(
+                _item(
+                    "figures",
+                    "fail",
+                    "发表级清单缺图: " + ", ".join(pub["missing_ids"]),
+                )
+            )
+        elif pub["n_required"]:
+            items.append(_item("figures", "pass", f"发表级清单 {pub['n_present']}/{pub['n_required']} 已就绪；共 {len(figs)} 张图"))
         else:
-            items.append(_item("figures", "pass", f"{len(figs)} 张图"))
+            need_violin = bool(state.get("code_qc"))
+            need_umap = bool(state.get("code_downstream"))
+            missing_fig = []
+            if need_violin and "violin" not in fig_names:
+                missing_fig.append("violin")
+            if need_violin and "scatter" not in fig_names:
+                missing_fig.append("scatter")
+            if need_umap and "umap" not in fig_names and "overview" not in fig_names:
+                missing_fig.append("umap")
+            if need_batch and not _has_batch_diagnostic(artifacts, mets):
+                missing_fig.append("batch_pca/umap")
+            if missing_fig:
+                items.append(_item("figures", "fail", "缺图: " + ", ".join(missing_fig)))
+            else:
+                items.append(_item("figures", "pass", f"{len(figs)} 张图"))
 
     if rd.get("has_dual") and rd.get("has_fusion") and (
         rd.get("has_celltypist") or "celltypist" in text or rd.get("has_ref2") or "deg_label" in text

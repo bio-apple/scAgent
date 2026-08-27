@@ -264,4 +264,10 @@ def enrich_from_workspace(workspace: str | Path, *, top_n: int = 200) -> dict:
             w.writeheader()
             for row in terms:
                 w.writerow({k: row.get(k) for k in w.fieldnames})
+        try:
+            from scagent.plotting import pathway_bubble_plot
+
+            pathway_bubble_plot(terms, figdir=workspace / "figures")
+        except Exception as exc:
+            log.info("pathway bubble skipped: %s", exc)
     return out

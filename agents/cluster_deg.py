@@ -15,6 +15,8 @@ def build_cluster_deg_plan(state: dict) -> dict:
         "tasks": ["neighbors", "umap", "leiden", "annotation", "cluster_markers", "deg", "trajectory"],
         "annotation": ann,
         "needs_pseudobulk": bool(plan.get("needs_pseudobulk")),
+        "force_pseudobulk_de": bool(plan.get("force_pseudobulk_de")),
+        "n_replicates": plan.get("n_replicates"),
         "deg_engine": plan.get("deg_engine") or "auto",
         "marker_method": plan.get("marker_method") or "auto",
         "deg_cross_validate": plan.get("deg_cross_validate", "auto"),

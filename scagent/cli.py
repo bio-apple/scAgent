@@ -59,7 +59,9 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
 
 
 def cmd_skills(_args: argparse.Namespace) -> int:
-    for s in list_skills():
+    skills = list_skills()
+    print(f"{len(skills)} bundled skills\n")
+    for s in skills:
         print(f"{s.name}\n  {s.description}\n")
     return 0
 
@@ -294,9 +296,18 @@ def cmd_init(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     from workflows.scRNA_langgraph import run_analysis
     from scagent.compat import ResumeIncompatibleError
+    from scagent.config import apply_performance_overrides
     from scagent.viewer import load_selection
 
     cfg = load_config()
+    if getattr(args, "dask", False) or getattr(args, "gpu", False) or getattr(args, "rapids", False):
+        apply_performance_overrides(
+            cfg,
+            dask=True if getattr(args, "dask", False) else None,
+            gpu=True if getattr(args, "gpu", False) else None,
+            rapids=True if getattr(args, "rapids", False) else None,
+        )
+        cfg = load_config()
     ingest()
     clear_retrieve_cache()
     mode = "full"
@@ -328,6 +339,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             qc_method=args.qc_method,
             remove_doublets=True if args.remove_doublets else None,
             doublet_methods=args.doublet_methods,
+            doublet_filter=args.doublet_filter,
             ambient=args.ambient,
             condition_key=args.condition_key,
             deg_engine=getattr(args, "deg_engine", None),
@@ -380,146 +392,253 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="scagent", description="单细胞生信分析智能体")
+    p = argparse.ArgumentParser(
+        prog="scagent",
+        description="LangGraph single-cell RNA-seq analysis agent. See README.en.md for full CLI reference.",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init", help="交互式配置向导（数据路径、组织、任务、资源限制）")
-    s.add_argument("--data", default=None, help="h5ad / loom / Cell Ranger outs / 10x mtx / Seurat .rds；逗号分隔或样本父目录")
-    s.add_argument("--tissue", default=None)
-    s.add_argument("--task", choices=["annotate", "qc", "deg", "trajectory", "custom"], default=None)
-    s.add_argument("--query", default=None, help="任务描述，默认由任务类型生成")
-    s.add_argument("--execute", action="store_true", help="真正执行生成的脚本")
-    s.add_argument("--dry-run", action="store_true", help="只生成脚本（默认）")
-    s.add_argument("--yes", action="store_true", help="其余项用默认值，不提问")
-    s.add_argument("--run", action="store_true", help="写完配置后立刻 scagent run")
-    s.add_argument("--language", choices=["python", "r"], default=None)
-    s.add_argument("--report-lang", choices=["zh", "en", "both"], default=None)
-    s.add_argument("--memory-mb", type=int, default=None, help="sandbox 内存上限 MB")
-    s.add_argument("--n-jobs", type=int, default=None, help="Scanpy/joblib 并行度，-1=全部 CPU")
-    s.add_argument("--timeout", type=int, default=None, help="单阶段超时秒")
-    s.add_argument("--batch-key", default=None)
-    s.add_argument("--condition-key", default=None)
-    s.add_argument("--interrupt", action="store_true")
-    s.add_argument("--no-write-config", action="store_true", help="不写 config.local.yaml")
+    s = sub.add_parser("init", help="Interactive setup wizard (data path, tissue, task, resource limits)")
+    s.add_argument(
+        "--data",
+        default=None,
+        help="h5ad / loom / Cell Ranger outs / 10x mtx / Seurat .rds; comma-separated paths or sample parent dir",
+    )
+    s.add_argument("--tissue", default=None, help="Tissue type for QC profiles (e.g. pbmc, brain)")
+    s.add_argument(
+        "--task",
+        choices=["annotate", "qc", "deg", "trajectory", "custom"],
+        default=None,
+        help="Preset task type",
+    )
+    s.add_argument("--query", default=None, help="Task description; default generated from --task")
+    s.add_argument("--execute", action="store_true", help="Execute generated scripts after setup")
+    s.add_argument("--dry-run", action="store_true", help="Generate scripts only (default)")
+    s.add_argument("--yes", action="store_true", help="Accept defaults without prompts")
+    s.add_argument("--run", action="store_true", help="Run scagent run immediately after writing config")
+    s.add_argument(
+        "--language",
+        choices=["r_first", "python", "r"],
+        default=None,
+        help="r_first=R pipelines with Scanpy fallback; python=Scanpy only; r=export Rmd only",
+    )
+    s.add_argument("--report-lang", choices=["zh", "en", "both"], default=None, help="Report language")
+    s.add_argument("--memory-mb", type=int, default=None, help="Sandbox memory limit (MB)")
+    s.add_argument("--n-jobs", type=int, default=None, help="Scanpy/joblib parallelism; -1=all CPUs")
+    s.add_argument("--timeout", type=int, default=None, help="Per-phase timeout (seconds)")
+    s.add_argument("--batch-key", default=None, help="obs column name for batch/sample")
+    s.add_argument("--condition-key", default=None, help="obs column for group comparison (pseudobulk DE)")
+    s.add_argument("--interrupt", action="store_true", help="Enable HITL pauses (mito threshold, resolution)")
+    s.add_argument("--no-write-config", action="store_true", help="Do not write config.local.yaml")
     s.set_defaults(func=cmd_init)
 
-    s = sub.add_parser("ingest", help="索引 knowledge/papers、methods、markers、best_practices 与 knowledge/sops")
+    s = sub.add_parser("ingest", help="Index knowledge/papers, methods, markers, best_practices, knowledge/sops")
     s.set_defaults(func=cmd_ingest)
 
-    s = sub.add_parser("update-kb", help="一键拉取最新 sc-best-practices（theislab）并重建 RAG 索引")
-    s.add_argument("--url", default=None, help="git URL，默认 https://github.com/theislab/single-cell-best-practices.git")
-    s.add_argument("--branch", default="main", help="分支，默认 main（失败时 clone 会再试 master）")
+    s = sub.add_parser(
+        "update-kb",
+        help="Fetch latest sc-best-practices (theislab) and rebuild RAG index",
+    )
+    s.add_argument(
+        "--url",
+        default=None,
+        help="Git URL; default https://github.com/theislab/single-cell-best-practices.git",
+    )
+    s.add_argument(
+        "--branch",
+        default="main",
+        help="Branch (default main; clone retries master on failure)",
+    )
     s.set_defaults(func=cmd_update_kb)
 
-    s = sub.add_parser("add-doc", help="把实验室 SOP 纳入本地 RAG（复制到 knowledge/sops 后 ingest）")
-    s.add_argument("path", help="文件或目录（md / txt / pdf / ipynb）")
-    s.add_argument("--name", default=None, help="写入 sops 时的文件名或子目录名")
+    s = sub.add_parser("add-doc", help="Add lab SOP to local RAG (copy to knowledge/sops then ingest)")
+    s.add_argument("path", help="File or directory (md / txt / pdf / ipynb)")
+    s.add_argument("--name", default=None, help="Target filename or subdirectory under sops/")
     s.set_defaults(func=cmd_add_doc)
 
-    s = sub.add_parser("retrieve", help="检索 RAG")
+    s = sub.add_parser("retrieve", help="Query RAG collections")
     s.add_argument("query")
     s.add_argument("--collection", default="papers")
-    s.add_argument("--collections", default=None, help="逗号分隔，如 papers,markers,best_practices")
-    s.add_argument("--top-k", type=int, default=None)
+    s.add_argument("--collections", default=None, help="Comma-separated, e.g. papers,markers,best_practices")
+    s.add_argument("--top-k", type=int, default=None, help="Number of chunks to return")
     s.set_defaults(func=cmd_retrieve)
 
-    s = sub.add_parser("skills", help="列出当前仓库已有 skills")
+    s = sub.add_parser("skills", help="List bundled SciAgent-style skills")
     s.set_defaults(func=cmd_skills)
 
-    s = sub.add_parser("skill", help="打印某个 skill")
+    s = sub.add_parser("skill", help="Print one skill by name")
     s.add_argument("name")
-    s.add_argument("--refs", action="store_true")
+    s.add_argument("--refs", action="store_true", help="Include reference links")
     s.set_defaults(func=cmd_show_skill)
 
-    s = sub.add_parser("demo", help="写出 100 细胞稀疏 demo h5ad")
-    s.add_argument("--path", default=None)
+    s = sub.add_parser("demo", help="Write 100-cell sparse demo h5ad")
+    s.add_argument("--path", default=None, help="Output path (default tests/data/tiny_100cells.h5ad)")
     s.set_defaults(func=cmd_demo)
 
-    s = sub.add_parser("memory", help="打印分析 provenance（步骤与参数，不是聊天）")
+    s = sub.add_parser("memory", help="Print analysis provenance (steps and params, not chat history)")
     s.set_defaults(func=cmd_memory)
 
-    s = sub.add_parser("snapshots", help="列出当前 thread 的惰性 AnnData 快照（硬链接/obs 增量，不把 X 拷进 RAM）")
-    s.add_argument("--thread-id", default=None)
+    s = sub.add_parser(
+        "snapshots",
+        help="List lazy AnnData snapshots for a thread (hardlinks / obs deltas, X not copied to RAM)",
+    )
+    s.add_argument("--thread-id", default=None, help="LangGraph thread_id (default last run)")
     s.set_defaults(func=cmd_snapshots)
 
-    s = sub.add_parser("branch", help="从某步快照分叉参数实验：共享 h5ad inode，不复制矩阵")
-    s.add_argument("--from-thread", default=None, help="源 thread_id，默认 last_thread_id")
-    s.add_argument("--as", dest="as_name", required=True, help="新 branch / thread 名")
-    s.add_argument("--step", default="qc", help="分叉点：qc 或 downstream")
-    s.add_argument("--checkout", action="store_true", help="硬链接到 workspace/ 以便接着跑")
+    s = sub.add_parser(
+        "branch",
+        help="Fork a parameter experiment from a snapshot (shared h5ad inode, no matrix copy)",
+    )
+    s.add_argument("--from-thread", default=None, help="Source thread_id (default .cache/last_thread_id)")
+    s.add_argument("--as", dest="as_name", required=True, help="New branch / thread name")
+    s.add_argument("--step", default="qc", help="Fork point: qc or downstream")
+    s.add_argument("--checkout", action="store_true", help="Hard-link snapshot into workspace/ for continued runs")
     s.set_defaults(func=cmd_branch)
 
-    s = sub.add_parser("run", help="Planner → Executor → Reviewer → Publication Report")
-    s.add_argument("query", help="分析任务，例如：对 PBMC 做标准注释")
-    s.add_argument("--data", default="", help="h5ad / loom / Cell Ranger outs / 10x mtx / Seurat .rds；逗号分隔=多样本拼接")
-    s.add_argument("--tissue", default="default")
-    s.add_argument("--language", choices=["python", "r"], default=None)
-    s.add_argument("--execute", action="store_true", help="在 workspace 中真正跑生成的脚本")
-    s.add_argument("--dry-run", action="store_true", help="只生成脚本与报告，不执行")
-    s.add_argument("--qc-only", action="store_true")
-    s.add_argument("--annotate-only", action="store_true", help="跳过 QC，需已有 workspace/adata_qc.h5ad")
-    s.add_argument("--interrupt", action="store_true", help="在线粒体阈值与 Leiden resolution 两处暂停，等人看直方图再确认")
-    s.add_argument("--yes", action="store_true", help="跳过人工确认")
-    s.add_argument("--resolution", type=float, default=None)
-    s.add_argument("--batch-key", default=None)
-    s.add_argument("--integrator", choices=["auto", "none", "harmony", "scvi", "cca", "scanorama", "bbknn"], default=None, help="批次校正。auto：inspect 检测到批次后 Harmony 或 scVI；cca/scanorama=Scanorama；bbknn 改邻居图")
-    s.add_argument("--impute", choices=["none", "magic", "alra"], default=None, help="Dropout 插补，默认读 config.modules.imputation")
-    s.add_argument("--ambient", choices=["auto", "none", "soupx", "decontx"], default=None, help="Ambient RNA 去除，默认读 config.modules.ambient")
-    s.add_argument("--remove-doublets", action="store_true", help="按两法共识 predicted_doublet 过滤细胞")
+    s = sub.add_parser("run", help="Planner → specialist agents → Code Audit → Reviewer → publication report")
+    s.add_argument("query", help='Analysis task, e.g. "Standard PBMC QC and annotation"')
+    s.add_argument(
+        "--data",
+        default="",
+        help="h5ad / loom / Cell Ranger outs / 10x mtx / Seurat .rds; comma-separated = multi-sample concat",
+    )
+    s.add_argument("--tissue", default="default", help="Tissue profile for QC thresholds")
+    s.add_argument(
+        "--language",
+        choices=["r_first", "python", "r"],
+        default=None,
+        help="r_first=R pipelines with Scanpy fallback; python=Scanpy only; r=export Rmd only",
+    )
+    s.add_argument("--execute", action="store_true", help="Execute generated scripts in workspace")
+    s.add_argument("--dry-run", action="store_true", help="Generate scripts and report without execution")
+    s.add_argument("--qc-only", action="store_true", help="Run QC phase only")
+    s.add_argument(
+        "--annotate-only",
+        action="store_true",
+        help="Skip QC; requires existing workspace/adata_qc.h5ad",
+    )
+    s.add_argument(
+        "--interrupt",
+        action="store_true",
+        help="Pause at mitochondrial threshold and Leiden resolution for human confirmation",
+    )
+    s.add_argument("--yes", action="store_true", help="Skip human confirmation (use recommended presets)")
+    s.add_argument("--resolution", type=float, default=None, help="Fixed Leiden resolution (skip HITL resolution step)")
+    s.add_argument("--batch-key", default=None, help="obs column for batch integration")
+    s.add_argument(
+        "--integrator",
+        choices=["auto", "none", "harmony", "scvi", "cca", "scanorama", "bbknn"],
+        default=None,
+        help="Batch correction: auto=Harmony or scVI after inspect; cca/scanorama=Scanorama; bbknn=neighbor graph",
+    )
+    s.add_argument(
+        "--impute",
+        choices=["none", "magic", "alra"],
+        default=None,
+        help="Dropout imputation (default from config.modules.imputation)",
+    )
+    s.add_argument(
+        "--ambient",
+        choices=["auto", "none", "soupx", "decontx"],
+        default=None,
+        help="Ambient RNA removal (default from config.modules.ambient)",
+    )
+    s.add_argument(
+        "--remove-doublets",
+        action="store_true",
+        help="Filter doublets per --doublet-filter (default high_conf = high-confidence only)",
+    )
+    s.add_argument(
+        "--doublet-filter",
+        choices=["high_conf", "all"],
+        default=None,
+        help="high_conf=conservative (high-confidence only); all=strict (high + low confidence)",
+    )
     s.add_argument(
         "--doublet-methods",
         choices=["auto", "scrublet", "both"],
         default=None,
-        help="auto：多样本/复杂组织 Scrublet+scDblFinder（无 R 则表达模拟）；both 强制交叉验证",
+        help="auto=Scrublet+scDblFinder on multi-sample/complex tissue; both=force cross-validation",
     )
-    s.add_argument("--condition-key", default=None, help="组间比较的 obs 列名；出现时走 sample-level pseudobulk DE")
+    s.add_argument(
+        "--condition-key",
+        default=None,
+        help="obs column for group comparison; enables sample-level pseudobulk DE",
+    )
     s.add_argument(
         "--deg-engine",
         choices=["auto", "edger", "deseq2", "ttest"],
         default=None,
-        help="组间 DEG 后端：auto 优先 rpy2 调用 edgeR，其次 DESeq2，否则 t-test+BH。任务描述里写 DESeq2/edgeR/t-test 也会被识别",
+        help="Group DEG backend: auto prefers rpy2 edgeR, then DESeq2, then t-test+BH",
     )
     s.add_argument(
         "--marker-method",
         choices=["auto", "wilcoxon", "t-test", "mast"],
         default=None,
-        help="探索性 cluster marker：Wilcoxon / t-test / MAST（MAST 需 R；不是组间结论）",
+        help="Exploratory cluster markers (Wilcoxon / t-test / MAST); not for group-level conclusions",
     )
     s.add_argument(
         "--deg-cross-validate",
         choices=["auto", "on", "off"],
         default=None,
-        help="第二检验交叉验证基因列表。auto 默认开；任务里写「交叉验证」或「只用 Wilcoxon」可覆盖",
+        help="Second statistical test to cross-validate DEG gene lists",
     )
-    s.add_argument("--qc-method", choices=["mad", "percentile", "hybrid"], default=None)
-    s.add_argument("--thread-id", default=None, help="LangGraph checkpoint thread_id；崩溃后用同一 id --resume")
-    s.add_argument("--resume", action="store_true", help="从上次 checkpoint 续跑（默认同 --thread-id 或 .cache/last_thread_id）；会核对 run_manifest 的 scagent_version")
-    s.add_argument("--from-checkpoint", action="store_true", dest="resume", help="同 --resume")
-    s.add_argument("--force-resume", action="store_true", help="主版本不兼容时仍强制续跑")
-    s.add_argument("--markers", default=None, help="自定义 marker CSV/JSON（可含 lineage 列）")
-    s.add_argument("--report-lang", choices=["zh", "en", "both"], default="zh")
-    s.add_argument("--selection", default=None, help="viewer 导出的 selection.json（框选细胞）")
+    s.add_argument(
+        "--qc-method",
+        choices=["mad", "percentile", "hybrid"],
+        default=None,
+        help="Dynamic QC threshold method",
+    )
+    s.add_argument(
+        "--thread-id",
+        default=None,
+        help="LangGraph checkpoint thread_id; reuse with --resume after crash",
+    )
+    s.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from last checkpoint (same --thread-id or .cache/last_thread_id); checks scagent_version",
+    )
+    s.add_argument("--from-checkpoint", action="store_true", dest="resume", help="Alias for --resume")
+    s.add_argument(
+        "--force-resume",
+        action="store_true",
+        help="Force resume even when major scagent_version mismatch",
+    )
+    s.add_argument("--markers", default=None, help="Custom marker CSV/JSON (optional lineage column)")
+    s.add_argument("--report-lang", choices=["zh", "en", "both"], default="zh", help="Publication report language")
+    s.add_argument("--selection", default=None, help="selection.json exported from viewer (selected cells)")
+    s.add_argument("--dask", action="store_true", help="Enable experimental Dask/out-of-core path (large h5ad)")
+    s.add_argument("--gpu", action="store_true", help="Enable GPU for scVI training when CUDA is available")
+    s.add_argument(
+        "--rapids",
+        action="store_true",
+        help="Use RAPIDS for neighbors/UMAP (requires rapids-singlecell; implies --gpu)",
+    )
     s.set_defaults(func=cmd_run)
 
-    s = sub.add_parser("view", help="Plotly 交互 UMAP：框选细胞")
-    s.add_argument("--data", default=None, help="h5ad，默认 workspace/adata_processed.h5ad")
-    s.add_argument("--serve", action="store_true", help="本地服务，框选后可直接提问")
-    s.add_argument("--port", type=int, default=8765)
-    s.add_argument("--open", action="store_true", help="用浏览器打开静态 viewer.html")
+    s = sub.add_parser("view", help="Interactive Plotly UMAP viewer with cell selection")
+    s.add_argument("--data", default=None, help="h5ad path (default workspace/adata_processed.h5ad)")
+    s.add_argument("--serve", action="store_true", help="Start local server for live Q&A after selection")
+    s.add_argument("--port", type=int, default=8765, help="Port for --serve")
+    s.add_argument("--open", action="store_true", help="Open static outputs/viewer.html in browser")
     s.set_defaults(func=cmd_view)
 
-    s = sub.add_parser("ask", help="针对框选细胞提问（composition / marker in vs rest）")
-    s.add_argument("query", nargs="?", default="", help="例如：分析我框选的这组细胞")
-    s.add_argument("--selection", required=True, help="selection.json")
-    s.add_argument("--data", default=None, help="h5ad")
+    s = sub.add_parser("ask", help="Ask about lasso/box-selected cells (composition / markers vs rest)")
+    s.add_argument("query", nargs="?", default="", help='e.g. "Analyze my selected cells"')
+    s.add_argument("--selection", required=True, help="Path to selection.json from viewer")
+    s.add_argument("--data", default=None, help="h5ad path")
     s.set_defaults(func=cmd_ask)
 
-    s = sub.add_parser("confirm", help="确认 HITL 决策（线粒体阈值或 Leiden resolution）后继续")
-    s.add_argument("kind", choices=["mt", "resolution"], help="决策点")
-    s.add_argument("choice", help="lenient|recommended|strict 或 coarse|recommended|fine|0.4")
-    s.add_argument("--execute", action="store_true")
-    s.add_argument("--dry-run", action="store_true")
-    s.add_argument("--thread-id", default=None)
+    s = sub.add_parser("confirm", help="Confirm HITL decision (mito threshold or Leiden resolution) and continue")
+    s.add_argument("kind", choices=["mt", "resolution"], help="Decision point: mt or resolution")
+    s.add_argument(
+        "choice",
+        help="mt: lenient|recommended|strict; resolution: coarse|recommended|fine|<float>",
+    )
+    s.add_argument("--execute", action="store_true", help="Execute scripts after confirm")
+    s.add_argument("--dry-run", action="store_true", help="Generate only after confirm")
+    s.add_argument("--thread-id", default=None, help="LangGraph thread_id")
     s.set_defaults(func=cmd_confirm)
     return p
 

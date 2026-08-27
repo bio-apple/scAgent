@@ -43,6 +43,16 @@ performance:
   n_jobs: -1                      # -1 = 全部 CPU；1 = 串行
   backed_threshold_cells: 250000  # ≥ 此细胞数时 h5ad 用 backed='r'
   cache: true
+  # 实验性：Scanpy out-of-core / Dask（需 dask；大图 backed + scagent_dask 元数据）
+  dask:
+    enabled: false
+    threshold_cells: 500000       # ≥ 此细胞数且 enabled 时走 Dask 兼容路径
+    chunk_size: 10000
+  # GPU：scVI 训练与可选 RAPIDS neighbors/UMAP（需 CUDA + rapids-singlecell）
+  gpu:
+    enabled: false
+    scvi: true                    # scVI.train(accelerator=gpu) when CUDA available
+    rapids: false                 # rapids-singlecell for neighbors/umap
 
 rag:
   top_k: 6
@@ -71,7 +81,7 @@ checkpoint:
   redis_url: null             # 例如 redis://localhost:6379
 
 analysis:
-  language: python   # python（Scanpy/Squidpy 可执行）| r（双重格式 Seurat Rmd，scAgent 不跑 R kernel）
+  language: r_first   # r_first（R 优先可执行）| python | r（仅写 Rmd，不执行）
   executor: jupyter        # jupyter=nbclient/ipykernel，无 OS jail；subprocess=旧 seatbelt/bwrap
   max_review_retries: 2
   execute_code: false
@@ -105,7 +115,8 @@ qc:
     n_genes_min: null
     n_genes_max: null
   overfilter_warn_pct: 30
-  remove_doublets: false      # true 或 CLI --remove-doublets：按共识 predicted_doublet 过滤
+  remove_doublets: false      # true 或 CLI --remove-doublets：按 doublet_filter 过滤
+  doublet_filter: high_conf    # high_conf=保守（仅移除高置信）| all=严格（高+低均移除）
   doublet_rate_max: 0.10      # 预测双细胞比例超过此值则审查警告/失败
   doublet_methods: auto       # auto | scrublet | both。auto：多样本/复杂组织 Scrublet+scDblFinder（无 R 则表达模拟）
 
@@ -126,6 +137,25 @@ modules:
   imputation: none            # none | magic | alra
   ambient: auto               # auto | none | soupx | decontx；brain/tumor 的 auto → soupx
   trajectory: auto            # auto=按组织/spliced 层评估连续性；force=用户要轨迹也拟合；off=关
+
+# SciAgent Tool Router：R 优先，Python 备用（与 SciAgent 原生路由表一致）
+tool_router:
+  policy: r_first             # r_first | python_first | r_only | python_only
+  defaults:
+    qc: seurat
+    normalize: seurat
+    integration: harmony_r
+    annotation: azimuth
+    trajectory: monocle3
+    cellchat: cellchat
+    spatial: giotto
+  python_fallback:
+    qc: scanpy
+    normalize: scanpy
+    integration: harmony_py
+    annotation: scanpy
+    trajectory: scanpy
+    spatial: squidpy
 
 # 整合质量（scIB iLISI/kBET 优先；否则 PCA 批次 R²）。未达标审查失败并触发重试。
 integration:

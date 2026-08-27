@@ -12,7 +12,7 @@ from scagent.parallel import apply_scanpy_n_jobs, map_parallel
 log = get_logger("analysis")
 
 
-def pca(adata, *, n_pcs: int | None = None, cache_name: str | None = None):
+def pca(adata, *, n_pcs: int | None = None, cache_name: str | None = None, random_state: int | None = None):
     import scanpy as sc
 
     from scagent.inspect_data import detect_expression_layer
@@ -23,20 +23,22 @@ def pca(adata, *, n_pcs: int | None = None, cache_name: str | None = None):
         hit = load_h5ad(cache_name)
         if hit is not None:
             return hit
-    n = n_pcs or analysis_params()["n_pcs"]
+    p = analysis_params()
+    n = n_pcs or p["n_pcs"]
+    rs = int(random_state if random_state is not None else p["seed"])
     info = detect_expression_layer(adata)
     if info.get("layer") == "scaled":
         log.info("pca skip scale: X already scaled (%s)", info.get("reason"))
     else:
         if info.get("layer") == "counts":
             log.warning("pca: X looks like counts; scaling raw counts. Prefer log1p first.")
-        sc.pp.scale(adata, max_value=analysis_params()["scale_max_value"])
+        sc.pp.scale(adata, max_value=p["scale_max_value"])
     existing = adata.obsm["X_pca"] if "X_pca" in adata.obsm else None
     if existing is not None and getattr(existing, "shape", (0, 0))[1] >= n:
         log.info("pca skip: X_pca already present n_pcs=%s", existing.shape[1])
     else:
-        sc.tl.pca(adata, n_comps=n, svd_solver="arpack", use_highly_variable=True)
-        log.info("pca n_pcs=%s", n)
+        sc.tl.pca(adata, n_comps=n, svd_solver="arpack", use_highly_variable=True, random_state=rs)
+        log.info("pca n_pcs=%s random_state=%s", n, rs)
     if cache_name:
         from scagent.cache import save_h5ad
 
@@ -44,13 +46,18 @@ def pca(adata, *, n_pcs: int | None = None, cache_name: str | None = None):
     return adata
 
 
-def neighbors(adata, *, n_neighbors: int | None = None, n_pcs: int | None = None, use_rep: str | None = None):
+def neighbors(adata, *, n_neighbors: int | None = None, n_pcs: int | None = None, use_rep: str | None = None, random_state: int | None = None):
     import scanpy as sc
+
+    from scagent.performance import try_rapids_neighbors
 
     p = analysis_params()
     n_neighbors = n_neighbors or p["n_neighbors"]
     n_pcs = n_pcs or p["n_pcs"]
-    kwargs: dict = {"n_neighbors": n_neighbors}
+    rep = use_rep
+    if try_rapids_neighbors(adata, n_neighbors=n_neighbors, n_pcs=n_pcs, use_rep=rep):
+        return adata
+    kwargs: dict = {"n_neighbors": n_neighbors, "random_state": int(random_state if random_state is not None else p["seed"])}
     if use_rep:
         kwargs["use_rep"] = use_rep
     else:
@@ -60,20 +67,28 @@ def neighbors(adata, *, n_neighbors: int | None = None, n_pcs: int | None = None
     return adata
 
 
-def leiden(adata, *, resolution: float | None = None, key_added: str = "leiden"):
+def leiden(adata, *, resolution: float | None = None, key_added: str = "leiden", random_state: int | None = None):
     import scanpy as sc
 
     p = analysis_params()
     res = resolution if resolution is not None else p.get("leiden_resolution") or 0.6
-    sc.tl.leiden(adata, resolution=float(res), key_added=key_added)
-    log.info("leiden resolution=%s n_clusters=%s", res, adata.obs[key_added].nunique())
+    rs = int(random_state if random_state is not None else p["seed"])
+    sc.tl.leiden(adata, resolution=float(res), key_added=key_added, random_state=rs)
+    log.info("leiden resolution=%s n_clusters=%s random_state=%s", res, adata.obs[key_added].nunique(), rs)
     return adata
 
 
-def umap(adata):
+def umap(adata, *, random_state: int | None = None):
     import scanpy as sc
 
-    sc.tl.umap(adata)
+    from scagent.performance import try_rapids_umap
+
+    p = analysis_params()
+    rs = int(random_state if random_state is not None else p["seed"])
+    if try_rapids_umap(adata):
+        return adata
+    sc.tl.umap(adata, random_state=rs)
+    log.info("umap random_state=%s", rs)
     return adata
 
 
@@ -147,6 +162,12 @@ def rank_genes(
     if overlap:
         print("marker_crossvalidate overlap=" + str(overlap.get("n_overlap")) + " jaccard=" + str(overlap.get("jaccard")))
     log.info("rank_genes_groups groupby=%s methods=%s use_raw=%s", groupby, methods, use_raw)
+    try:
+        from scagent.plotting import marker_heatmap
+
+        marker_heatmap(adata, groupby=groupby)
+    except Exception as exc:
+        log.info("marker heatmap skipped: %s", exc)
     return adata
 
 
@@ -415,6 +436,12 @@ def pseudobulk_de(
     if len(df):
         df.to_csv("pseudobulk_de.csv", index=False)
         adata.uns["pseudobulk_de"]["n_sig"] = int((df.get("fdr", pd.Series(dtype=float)) < 0.05).sum())
+        try:
+            from scagent.plotting import volcano_from_de_csv
+
+            volcano_from_de_csv(Path("pseudobulk_de.csv"))
+        except Exception as exc:
+            log.info("volcano plot skipped: %s", exc)
     log.info("pseudobulk_de engine=%s n=%s cv=%s", used, len(df), bool(overlap))
     return adata
 

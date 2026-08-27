@@ -13,7 +13,7 @@ from scagent.logutil import get_logger
 log = get_logger("viewer")
 
 MAX_CELLS = 15_000
-_COLOR_COLS = ("leiden", "cell_type", "cell_type_l1", "annotation_status", "sample", "predicted_doublet")
+_COLOR_COLS = ("leiden", "cell_type", "cell_type_l1", "annotation_status", "sample", "predicted_doublet", "doublet_call", "scagent_annotation")
 _QC_COLS = ("n_genes_by_counts", "total_counts", "pct_counts_mt")
 
 _HTML = """<!DOCTYPE html>
@@ -43,6 +43,9 @@ _HTML = """<!DOCTYPE html>
   #stats { font-variant-numeric: tabular-nums; white-space: pre-wrap; font-size:12px; color:var(--muted); }
   #reply { white-space: pre-wrap; font-size:13px; background:#f0fdf4; padding:8px; min-height:4em; }
   .warn { color:#b45309; font-size:12px; }
+  .pubfigs { font-size:12px; max-height: 28vh; overflow:auto; }
+  .pubfigs a { color: var(--acc); text-decoration:none; }
+  .pubfigs li { margin: 0 0 6px 1.1em; }
 </style>
 </head>
 <body>
@@ -64,6 +67,8 @@ _HTML = """<!DOCTYPE html>
     <textarea id="q" placeholder="例如：分析我框选的这组细胞"></textarea>
     <button type="button" id="ask">提交选区 + 问题</button>
     <button type="button" id="dl" class="secondary">下载 selection.json</button>
+    <h2>发表级主图</h2>
+    <div id="pubfigs" class="pubfigs"></div>
     <p class="warn" id="hint"></p>
     <div id="reply"></div>
   </aside>
@@ -100,6 +105,37 @@ const colorSel = document.getElementById('color');
 });
 colorSel.onchange = () => paint(colorSel.value);
 paint(colorSel.value || 'leiden');
+
+(function renderPubFigs(){
+  const box = document.getElementById('pubfigs');
+  const items = DATA.publication_figures || [];
+  if (!items.length){ box.textContent = '（执行后见 report.md 发表级清单）'; return; }
+  const ul = document.createElement('ul');
+  items.forEach(it => {
+    const li = document.createElement('li');
+    const title = it.title_zh || it.id || 'figure';
+    const st = it.status || '';
+    let txt = title + ' [' + st + ']';
+    if (it.path && it.status === 'present') {
+      const parts = String(it.path).split(';').map(s => s.trim()).filter(Boolean);
+      txt += ' ';
+      parts.forEach((p, i) => {
+        const name = p.split('/').pop();
+        const a = document.createElement('a');
+        a.href = p.startsWith('figures/') ? p : ('figures/' + name);
+        a.textContent = name;
+        a.target = '_blank';
+        li.appendChild(document.createTextNode(i ? ' · ' : ''));
+        li.appendChild(a);
+      });
+    } else {
+      li.textContent = txt;
+    }
+    if (!li.textContent) li.textContent = txt;
+    ul.appendChild(li);
+  });
+  box.appendChild(ul);
+})();
 
 let selected = [];
 document.getElementById('umap').on('plotly_selected', ev => {
@@ -271,6 +307,7 @@ def export_workspace_viewer(
     h5ad: Path | None = None,
     workspace: Path | None = None,
     ask_endpoint: str | None = None,
+    state: dict | None = None,
 ) -> Path | None:
     path = Path(h5ad) if h5ad else find_workspace_h5ad(workspace)
     if path is None or not path.is_file():
@@ -280,6 +317,11 @@ def export_workspace_viewer(
 
     adata = read_h5ad(path, backed=True)
     payload = build_payload(adata)
+    if state:
+        from scagent.publication_figures import build_publication_figure_inventory
+
+        inv = build_publication_figure_inventory(state)
+        payload["publication_figures"] = inv.get("items") or []
     dest = Path(out_dir) / "viewer.html"
     write_viewer_html(payload, dest, ask_endpoint=ask_endpoint)
     (Path(out_dir) / "viewer_payload.json").write_text(json.dumps({"n_total": payload["n_total"], "n_shown": payload["n_shown"], "sampled": payload["sampled"], "embedding": payload["embedding"]}, indent=2), encoding="utf-8")

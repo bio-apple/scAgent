@@ -9,6 +9,8 @@ from scagent.logutil import get_logger
 
 log = get_logger("annotate")
 
+CELLTYPIST_CONF_THRESHOLD = 0.8
+SCANVI_LABELS_KEY = "_scanvi_supervision"
 _EMPTY = {"", "unknown", "unassigned", "nan", "none", "low_conf", "mixed", "na"}
 
 
@@ -143,4 +145,140 @@ def fuse_annotation(
         + " sources="
         + ",".join(cols)
     )
+    return adata
+
+
+def _ensure_counts_layer(adata):
+    import numpy as np
+
+    if "counts" in adata.layers:
+        return "counts"
+    if adata.raw is not None:
+        adata.layers["counts"] = adata.raw.X.copy()
+        return "counts"
+    x = adata.X
+    if hasattr(x, "max"):
+        try:
+            mx = float(x.max())
+        except Exception:
+            mx = None
+        if mx is not None and mx > 50:
+            adata.layers["counts"] = adata.X.copy()
+            return "counts"
+    raise RuntimeError("scANVI needs raw counts in layers['counts'] or adata.raw")
+
+
+def _run_scanvi(
+    adata,
+    *,
+    labels_key: str,
+    batch_key: str | None,
+    unlabeled: str = "Unknown",
+    max_epochs_scvi: int = 50,
+    max_epochs_scanvi: int = 20,
+):
+    import scvi
+
+    layer = _ensure_counts_layer(adata)
+    setup_kw: dict[str, Any] = {"layer": layer, "labels_key": labels_key, "unlabeled_category": unlabeled}
+    if batch_key and batch_key in adata.obs.columns and int(adata.obs[batch_key].nunique()) > 1:
+        setup_kw["batch_key"] = batch_key
+    scvi.model.SCANVI.setup_anndata(adata, **setup_kw)
+    scvi_model = scvi.model.SCVI(adata, n_latent=30)
+    scvi_model.train(max_epochs=max_epochs_scvi, early_stopping=True)
+    model = scvi.model.SCANVI.from_scvi_model(scvi_model, unlabeled_category=unlabeled)
+    model.train(max_epochs=max_epochs_scanvi)
+    pred = model.predict()
+    soft = model.predict(soft=True)
+    conf = soft.max(axis=1)
+    return pred, conf, model
+
+
+def ensemble_cell_annotation(
+    adata,
+    *,
+    conf_threshold: float = CELLTYPIST_CONF_THRESHOLD,
+    sample_key: str | None = "sample",
+    labels_key: str = "celltypist_label",
+    conf_key: str = "celltypist_conf",
+    max_epochs_scvi: int = 50,
+    max_epochs_scanvi: int = 20,
+):
+    """CellTypist first; cells with max_prob < threshold get scANVI semi-supervised labels.
+
+    Writes ``scagent_annotation``, ``scagent_annotation_conf``, ``scagent_annotation_method``.
+    """
+    import numpy as np
+
+    n = adata.n_obs
+    if labels_key not in adata.obs:
+        adata.obs["scagent_annotation"] = "unassigned"
+        adata.obs["scagent_annotation_conf"] = 0.0
+        adata.obs["scagent_annotation_method"] = "none"
+        adata.uns["scagent_annotation"] = {"method": "none", "reason": "no_celltypist"}
+        return adata
+
+    labels = adata.obs[labels_key].astype(str).to_numpy()
+    if conf_key in adata.obs:
+        conf = np.asarray(adata.obs[conf_key], dtype=float)
+    else:
+        conf = np.ones(n, dtype=float)
+
+    high = conf >= float(conf_threshold)
+    low = ~high
+    info: dict[str, Any] = {
+        "celltypist_threshold": float(conf_threshold),
+        "n_high_conf": int(high.sum()),
+        "n_low_conf": int(low.sum()),
+        "scanvi_ran": False,
+    }
+
+    if not low.any():
+        adata.obs["scagent_annotation"] = labels
+        adata.obs["scagent_annotation_conf"] = conf
+        adata.obs["scagent_annotation_method"] = "celltypist"
+        info["method"] = "celltypist"
+        adata.uns["scagent_annotation"] = info
+        print("scagent_annotation=celltypist_only n_low_conf=0")
+        return adata
+
+    supervise = np.where(high, labels, "Unknown")
+    adata.obs[SCANVI_LABELS_KEY] = supervise
+    batch_key = sample_key if sample_key and sample_key in adata.obs.columns else None
+    try:
+        scanvi_pred, scanvi_conf, _model = _run_scanvi(
+            adata,
+            labels_key=SCANVI_LABELS_KEY,
+            batch_key=batch_key,
+            max_epochs_scvi=max_epochs_scvi,
+            max_epochs_scanvi=max_epochs_scanvi,
+        )
+        scanvi_pred = np.asarray(scanvi_pred, dtype=object)
+        scanvi_conf = np.asarray(scanvi_conf, dtype=float)
+        final = labels.copy()
+        final[low] = scanvi_pred[low]
+        final_conf = conf.copy()
+        final_conf[low] = scanvi_conf[low]
+        methods = np.where(high, "celltypist", "scanvi")
+        adata.obs["scanvi_label"] = scanvi_pred
+        adata.obs["scanvi_conf"] = scanvi_conf
+        info.update({"scanvi_ran": True, "method": "celltypist+scanvi"})
+        adata.obs["scagent_annotation_method"] = methods
+        print(
+            "scagent_annotation=celltypist+scanvi n_low_conf="
+            + str(int(low.sum()))
+            + " scanvi_median_conf="
+            + str(round(float(np.median(scanvi_conf[low])), 3) if low.any() else 0)
+        )
+    except Exception as exc:
+        log.warning("scANVI fallback failed: %s", exc)
+        print("SCAGENT_WARN: scANVI fallback failed (" + str(exc) + "); using CellTypist labels")
+        final = labels
+        final_conf = conf
+        adata.obs["scagent_annotation_method"] = np.where(high, "celltypist", "celltypist_low_conf")
+        info.update({"scanvi_ran": False, "method": "celltypist_only", "scanvi_error": str(exc)})
+
+    adata.obs["scagent_annotation"] = final
+    adata.obs["scagent_annotation_conf"] = final_conf
+    adata.uns["scagent_annotation"] = info
     return adata

@@ -32,11 +32,12 @@ _PKGS = (
 )
 
 
-def package_versions(names: tuple[str, ...] = _PKGS) -> dict[str, str]:
+def package_versions(names: tuple[str, ...] = _PKGS, extra: tuple[str, ...] = ()) -> dict[str, str]:
     from scagent.compat import scagent_version
 
+    all_names = tuple(dict.fromkeys([*names, *extra]))
     out: dict[str, str] = {"python": sys.version.split()[0], "scagent": scagent_version()}
-    for name in names:
+    for name in all_names:
         try:
             out[name] = metadata.version(name)
         except metadata.PackageNotFoundError:
@@ -155,6 +156,16 @@ def build_notebook(state: dict) -> dict[str, Any]:
                 stdout=exe.get("stdout") or "",
                 stderr=exe.get("stderr") or "",
                 execution_count=n if exe.get("executed") else None,
+            )
+        )
+    if n > 0:
+        from scagent.publication_figures import render_publication_figure_inventory_markdown
+
+        lang = state.get("report_lang") or "zh"
+        use_en = lang == "en"
+        cells.append(
+            _md_cell(
+                render_publication_figure_inventory_markdown(state, lang="en" if use_en else "zh").rstrip()
             )
         )
     if n == 0:

@@ -262,7 +262,7 @@ def writer_node(state: AgentState) -> dict:
 
     viewer = None
     try:
-        viewer = export_workspace_viewer(out_dir)
+        viewer = export_workspace_viewer(out_dir, state=state_w)
     except Exception as exc:
         log.warning("interactive viewer skipped: %s", exc)
     if viewer:
@@ -426,6 +426,7 @@ def run_analysis(
     qc_method: str | None = None,
     remove_doublets: bool | None = None,
     doublet_methods: str | None = None,
+    doublet_filter: str | None = None,
     ambient: str | None = None,
     condition_key: str | None = None,
     deg_engine: str | None = None,
@@ -495,6 +496,7 @@ def run_analysis(
         "qc_method": qc_method,
         "remove_doublets": remove_doublets,
         "doublet_methods": doublet_methods,
+        "doublet_filter": doublet_filter,
         "ambient": ambient,
         "condition_key": condition_key,
         "deg_engine": deg_engine,

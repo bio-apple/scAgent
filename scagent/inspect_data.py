@@ -295,6 +295,14 @@ def _inspect_h5ad(path: Path, meta: dict[str, Any], *, species: str | None, extr
                 if n_s > 1 and n_s == n_c and len(pairs) == n_s:
                     meta["batch_condition_confounded"] = True
                     meta["notes"].append("样本与条件 1:1 共线：auto 将跳过整合，以免把处理效应当批次抹掉。")
+                rep = adata.obs.groupby(ck, observed=True)[sk].nunique()
+                meta["n_replicates"] = int(rep.min()) if len(rep) else 1
+                meta["n_replicates_by_condition"] = {str(k): int(v) for k, v in rep.items()}
+                if int(meta["n_replicates"]) >= 2:
+                    meta["force_pseudobulk_de"] = True
+                    meta["notes"].append(
+                        f"检测到条件列 {ck!r} 且每条件 ≥{meta['n_replicates']} 个样本：组间 DE 强制 pseudobulk + DESeq2/edgeR。"
+                    )
             except Exception:
                 pass
         try:

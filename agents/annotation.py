@@ -29,13 +29,13 @@ def build_annotation_plan(state: dict) -> dict:
     plan = {
         "tiers": [
             "Leiden 无偏聚类",
-            f"参考映射（CellTypist {ct_model or '无匹配模型'}）仅作假说，禁止只调用 Azimuth",
+            f"参考映射（CellTypist {ct_model or '无匹配模型'}）+ scANVI 后备（max_prob<0.8 → scagent_annotation）",
             "独立证据：cluster Wilcoxon 基因 ∩ catalog；可选 SingleR/popV",
             "层级 marker 双验证（≥2 阳性 + ≥1 阴性）",
             "三路表决融合：≥2 一致才赋值；冲突标 mixed；单路 auto 标 unvalidated",
         ],
         "forbid_single_gene": True,
-        "low_confidence_cutoff": 0.5,
+        "low_confidence_cutoff": 0.8,
         "dual_validation": True,
         "celltypist_model": ct_model,
         "catalog_tissue": catalog.get("tissue"),
@@ -44,9 +44,9 @@ def build_annotation_plan(state: dict) -> dict:
         "marker_excerpt": markers,
         "code": code,
         "instructions": (
-            "自动注释（CellTypist）只是假说，不能只跑 Azimuth。"
+            "自动注释：CellTypist 先行；max_prob<0.8 的细胞触发 scANVI 半监督，写入 obs['scagent_annotation']。"
             "独立证据：cluster DE∩catalog + ≥2 阳性/≥1 阴性 marker。"
-            "fuse_annotation 多数表决：≥2 路一致才定 cell_type；冲突 mixed；单路 auto 为 unvalidated/low_conf。"
+            "fuse_annotation 多数表决：marker + scagent_annotation + deg_label；≥2 路一致才定 cell_type。"
         ),
         "hierarchical": True,
     }

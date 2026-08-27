@@ -8,6 +8,7 @@ from textwrap import dedent
 from agents.markers import catalog_as_python, choose_celltypist_model, load_marker_catalog
 from scagent.config import analysis_params, load_config, performance_params
 from scagent.doublets import resolve_doublet_methods
+from scagent.performance import scvi_train_suffix
 from scagent.preprocess import choose_ambient
 
 LOCKED_START = "# === SCAGENT_LOCKED_QC_START ==="
@@ -36,6 +37,18 @@ def _load_block(path: str, *, n_cells: int | None = None) -> str:
     is_plain_h5ad = p.endswith(".h5ad") and not is_multi
     if is_plain_h5ad:
         thr = int(performance_params()["backed_threshold_cells"])
+        from scagent.config import dask_params
+
+        dp = dask_params()
+        dask_thr = int(dp.get("threshold_cells") or 500_000)
+        use_dask = bool(dp.get("enabled")) and n_cells is not None and int(n_cells) >= dask_thr
+        if use_dask:
+            return (
+                f"adata = sc.read_h5ad({path_r}, backed='r')\n"
+                "from scagent.performance import configure_scanpy_dask\n"
+                "configure_scanpy_dask(adata)\n"
+                'print("SCAGENT_WARN: Dask experimental path (backed + scagent_dask); materialize subsets before scale/PCA")'
+            )
         if n_cells is not None and int(n_cells) >= thr:
             return (
                 f"adata = sc.read_h5ad({path_r}, backed='r')\n"
@@ -72,16 +85,17 @@ def _ambient_block(method: str | None) -> str:
     )
 
 
-def _doublet_block(remove_doublets: bool, methods: str, tissue: str) -> str:
+def _doublet_block(remove_doublets: bool, methods: str, tissue: str, doublet_filter: str) -> str:
     flag = "True" if remove_doublets else "False"
     note = (
-        "# Scrublet + scDblFinder (or count-simulation) cross-check; consensus = predicted_doublet"
+        "# Scrublet + scDblFinder (or count-simulation); doublet_call: high_conf | low_conf | singlet"
         if methods == "both"
-        else "# Scrublet → predicted_doublet"
+        else "# Scrublet; doublet_call by score (>0.8 high_conf)"
     )
     return dedent(
         f"""\
         REMOVE_DOUBLETS = {flag}
+        DOUBLET_FILTER = {doublet_filter!r}
         {note}
         from scagent.doublets import detect_doublets
         adata = detect_doublets(
@@ -90,12 +104,18 @@ def _doublet_block(remove_doublets: bool, methods: str, tissue: str) -> str:
             sample_key=__SAMPLE_KEY__,
             tissue={tissue!r},
             remove=REMOVE_DOUBLETS,
+            doublet_filter=DOUBLET_FILTER,
         )
         _dbl = adata.uns.get("doublets") or {{}}
         doublet_rate = float(_dbl.get("rate", 0.0))
+        doublet_rate_high_conf = float(_dbl.get("rate_high_conf", 0.0))
+        doublet_rate_low_conf = float(_dbl.get("rate_low_conf", 0.0))
+        doublet_n_high_conf = int(_dbl.get("n_high_conf", 0))
+        doublet_n_low_conf = int(_dbl.get("n_low_conf", 0))
         doublet_status = str(_dbl.get("status") or "ok")
         doublet_agreement = _dbl.get("agreement")
         doublet_engines = list(_dbl.get("methods") or [])
+        doublet_filter_applied = str(_dbl.get("doublet_filter") or DOUBLET_FILTER)
         """
     )
 
@@ -107,6 +127,67 @@ def _cell_cycle_block(species: str, mode: str, tissue: str) -> str:
         cell_cycle_score(adata, species={species!r})
         maybe_regress_cell_cycle(adata, mode={mode!r}, tissue={tissue!r})
         print("cell_cycle", (adata.uns.get("cell_cycle") or {{}}))
+        """
+    )
+
+
+def _router_qc_bootstrap(data_path: str, meta: dict, qc: dict) -> str:
+    import json
+
+    slim_qc = {k: v for k, v in qc.items() if k != "rag_excerpt"}
+    return dedent(
+        f"""\
+        import os
+        from pathlib import Path
+        if os.environ.get("SCAGENT_FORCE_PYTHON") != "1":
+            from scagent.phase_runner import maybe_run_r_qc
+            _router_meta = {json.dumps(meta, ensure_ascii=False)}
+            _router_qc = {json.dumps(slim_qc, ensure_ascii=False)}
+            if maybe_run_r_qc(data_path={data_path!r}, workspace=Path("."), meta=_router_meta, qc=_router_qc):
+                raise SystemExit(0)
+        """
+    )
+
+
+def _router_downstream_bootstrap(meta: dict, plan: dict) -> str:
+    import json
+
+    slim_plan = {
+        k: plan.get(k)
+        for k in (
+            "integrator",
+            "resolution",
+            "needs_pseudobulk",
+            "force_pseudobulk_de",
+            "condition_key",
+            "n_replicates",
+        )
+        if plan.get(k) is not None
+    }
+    slim_meta = {
+        k: meta.get(k)
+        for k in (
+            "tissue",
+            "species",
+            "sample_key",
+            "need_batch_correction",
+            "n_samples",
+            "condition_key",
+            "n_replicates",
+            "force_pseudobulk_de",
+        )
+        if meta.get(k) is not None
+    }
+    return dedent(
+        f"""\
+        import os
+        from pathlib import Path
+        if os.environ.get("SCAGENT_FORCE_PYTHON") != "1":
+            from scagent.phase_runner import maybe_run_r_downstream
+            _router_meta = {json.dumps(slim_meta, ensure_ascii=False)}
+            _router_plan = {json.dumps(slim_plan, ensure_ascii=False)}
+            if maybe_run_r_downstream(workspace=Path("."), meta=_router_meta, plan=_router_plan):
+                raise SystemExit(0)
         """
     )
 
@@ -142,6 +223,8 @@ def _celltypist_block(model: str | None) -> str:
             print("SCAGENT_WARN: CellTypist skipped (" + str(exc) + ")")
             adata.obs["celltypist_label"] = "unassigned"
             adata.obs["celltypist_conf"] = 0.0
+        from scagent.annotate import ensemble_cell_annotation
+        ensemble_cell_annotation(adata, sample_key=__SAMPLE_KEY__, conf_threshold=0.8)
         """
     )
 
@@ -197,13 +280,24 @@ def _de_block(marker_method: str, cross_validate: str | bool) -> str:
 
 
 def _pseudobulk_block(
-    needs_pseudobulk: bool, condition_key: str, sample_key: str, engine: str = "auto", cross_validate: str | bool = "auto"
+    needs_pseudobulk: bool,
+    condition_key: str,
+    sample_key: str,
+    engine: str = "auto",
+    cross_validate: str | bool = "auto",
+    force_pseudobulk: bool = False,
 ) -> str:
     if not needs_pseudobulk:
         return "print('pseudobulk_de skipped (no condition comparison in query)')"
+    eng = "auto" if force_pseudobulk and str(engine).lower() in {"ttest", "t-test", "wilcoxon", "mast"} else engine
+    force_note = (
+        "# FORCED: condition_key + n_replicates≥2 → sample-level pseudobulk + DESeq2/edgeR only\n        FORCE_PSEUDOBULK_DE = True\n        "
+        if force_pseudobulk
+        else ""
+    )
     return dedent(
         f"""\
-        from scagent.analysis import pseudobulk_de
+        {force_note}from scagent.analysis import pseudobulk_de
         COND_KEY = {condition_key!r}
         if COND_KEY not in adata.obs.columns:
             print("SCAGENT_WARN: condition column " + COND_KEY + " missing; pseudobulk path recorded but not tested")
@@ -213,7 +307,7 @@ def _pseudobulk_block(
             sample_key={sample_key},
             condition_key=COND_KEY,
             groupby="cell_type" if "cell_type" in adata.obs else "leiden",
-            engine={engine!r},
+            engine={eng!r},
             cross_validate={cross_validate!r},
         )
         pb = adata.uns.get("pseudobulk_de") or {{}}
@@ -396,6 +490,7 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
     impute_method = str(qc.get("imputation") or "none")
     ambient_method = str(qc.get("ambient") or choose_ambient(str(tissue), qc.get("ambient_requested")))
     remove_doublets = bool(qc.get("remove_doublets"))
+    doublet_filter = str(qc.get("doublet_filter") or "high_conf")
     n_samples = int(meta.get("n_samples") or 1)
     if meta.get("need_batch_correction"):
         n_samples = max(n_samples, 2)
@@ -432,6 +527,8 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         fig_dir = Path("figures")
         fig_dir.mkdir(exist_ok=True)
         sc.settings.figdir = str(fig_dir)
+
+        __ROUTER_QC__
 
         __LOAD_BLOCK__
         adata.var_names_make_unique()
@@ -470,7 +567,7 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         adata.raw = adata
         from scagent.analysis import pca as scagent_pca
         scagent_pca(adata)
-
+        from scagent.reproducibility import summarize_adata
         metrics = {
             "n_before": n_before,
             "n_after": n_after,
@@ -481,12 +578,18 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
             "imputation": __IMPUTE_METHOD__,
             "ambient": __AMBIENT_METHOD__,
             "doublet_rate": doublet_rate,
+            "doublet_rate_high_conf": doublet_rate_high_conf,
+            "doublet_rate_low_conf": doublet_rate_low_conf,
+            "doublet_n_high_conf": doublet_n_high_conf,
+            "doublet_n_low_conf": doublet_n_low_conf,
             "doublet_status": doublet_status,
             "doublet_agreement": doublet_agreement,
             "doublet_methods": doublet_engines,
+            "doublet_filter": doublet_filter_applied,
             "remove_doublets": REMOVE_DOUBLETS,
             "seed": SEED,
             "phase": "qc",
+            "adata_out": summarize_adata(adata, step="qc_output"),
         }
         print("SCAGENT_METRICS:" + json.dumps(metrics))
         Path("qc_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
@@ -500,13 +603,14 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
     return (
         tpl.replace("__TISSUE__", str(tissue))
         .replace("__SPECIES__", str(species))
+        .replace("__ROUTER_QC__", _router_qc_bootstrap(str(path), meta, qc))
         .replace("__LOAD_BLOCK__", _load_block(path, n_cells=None if n_cells is None else int(n_cells)))
         .replace("__SAMPLE_KEY__", sample_key)
         .replace("__MT_PREFIX__", repr(mt_prefix))
         .replace("__HB_LINE__", hb_line)
         .replace("__LOCKED_QC__", _locked_qc(qc, qc_vars))
         .replace("__AMBIENT__", _ambient_block(ambient_method))
-        .replace("__SCRUBLET__", _doublet_block(remove_doublets, doublet_methods, str(tissue)))
+        .replace("__SCRUBLET__", _doublet_block(remove_doublets, doublet_methods, str(tissue), doublet_filter))
         .replace("__CELL_CYCLE__", _cell_cycle_block(str(species), regress_cc, str(tissue)))
         .replace("__NMADS__", str(nmads))
         .replace("__QC_METHOD__", json.dumps(str(qc.get("method") or "mad")))
@@ -543,6 +647,7 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
     if "celltypist_model" not in plan:
         ct_model = choose_celltypist_model(str(tissue), meta.get("species"))
     needs_pb = bool(plan.get("needs_pseudobulk"))
+    force_pb = bool(plan.get("force_pseudobulk_de") or meta.get("force_pseudobulk_de"))
     condition_key = str(plan.get("condition_key") or meta.get("condition_key") or "condition")
     deg_engine = str(plan.get("deg_engine") or (load_config().get("deg") or {}).get("engine") or "auto")
     marker_method = str(plan.get("marker_method") or (load_config().get("deg") or {}).get("marker_method") or "auto")
@@ -562,6 +667,7 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
     nb_pca = _nb_pca(p)
     nb_harm = _nb_rep(p, "X_pca_harmony")
     nb_scvi = _nb_rep(p, "X_scVI")
+    scvi_extra = scvi_train_suffix()
     res_list = p.get("leiden_resolutions") or [0.2, 0.4, 0.6, 0.8, 1.0]
     perf = performance_params()
 
@@ -573,7 +679,7 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
                 import scvi
                 scvi.model.SCVI.setup_anndata(adata, layer="counts", batch_key={sample_key})
                 model = scvi.model.SCVI(adata)
-                model.train(max_epochs=50, early_stopping=True)
+                model.train(max_epochs=50, early_stopping=True{scvi_extra})
                 adata.obsm["X_scVI"] = model.get_latent_representation()
                 {nb_scvi}
                 integrated = True
@@ -723,6 +829,8 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         fig_dir.mkdir(exist_ok=True)
         sc.settings.figdir = str(fig_dir)
 
+        __ROUTER_DN__
+
         qc_path = Path("adata_qc.h5ad")
         if not qc_path.exists():
             alt = Path(".cache") / "adata_qc.h5ad"
@@ -731,6 +839,8 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             else:
                 raise FileNotFoundError("adata_qc.h5ad missing; run QC phase first")
         adata = sc.read_h5ad(qc_path)
+        from scagent.reproducibility import summarize_adata
+        adata_in_summary = summarize_adata(adata, step="qc_checkpoint", path=str(qc_path))
         if not getattr(adata, "isbacked", False) and adata.X is not None and not sp.issparse(adata.X):
             adata.X = sp.csr_matrix(adata.X)
         if __SAMPLE_KEY__ not in adata.obs.columns:
@@ -745,12 +855,12 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         if "X_pca" in adata.obsm:
             print("SCAGENT_WARN: skip pca; X_pca exists")
         else:
-            sc.tl.pca(adata, n_comps=__N_PCS__, svd_solver="arpack", use_highly_variable=True)
+            sc.tl.pca(adata, n_comps=__N_PCS__, svd_solver="arpack", use_highly_variable=True, random_state=SEED)
         __INTEGRATE__
-        sc.tl.umap(adata)
+        sc.tl.umap(adata, random_state=SEED)
 
         __RES_BLOCK__
-        sc.tl.leiden(adata, resolution=chosen_resolution, key_added="leiden")
+        sc.tl.leiden(adata, resolution=chosen_resolution, key_added="leiden", random_state=SEED)
         if CACHE_ON:
             Path(".cache").mkdir(exist_ok=True)
             adata.write(Path(".cache") / "after_cluster.h5ad")
@@ -825,9 +935,15 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             col = "cell_type_l" + str(i + 1)
             adata.obs[col] = adata.obs["leiden"].astype(str).map(lambda c, i=i: (cluster_lin.get(c) or ["unknown"])[i] if i < len(cluster_lin.get(c) or []) else (cluster_lin.get(c) or ["unknown"])[-1] if cluster_lin.get(c) else "unknown")
         from scagent.annotate import fuse_annotation
-        fuse_annotation(adata, sources=("marker_label", "celltypist_label", "deg_label"))
-        if "celltypist_label" in adata.obs:
+        _auto_src = "scagent_annotation" if "scagent_annotation" in adata.obs.columns else "celltypist_label"
+        fuse_annotation(adata, sources=("marker_label", _auto_src, "deg_label"))
+        if "scagent_annotation" in adata.obs:
+            auto = adata.obs["scagent_annotation"].astype(str)
+        elif "celltypist_label" in adata.obs:
             auto = adata.obs["celltypist_label"].astype(str)
+        else:
+            auto = adata.obs["marker_label"].astype(str)
+        if "celltypist_label" in adata.obs or "scagent_annotation" in adata.obs:
             mark = adata.obs["marker_label"].astype(str)
             adata.obs["annotation_conflict"] = (auto != mark) & (mark != "unknown") & (auto != "unassigned")
             n_conf = int(adata.obs["annotation_conflict"].sum())
@@ -836,12 +952,18 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             for row in evidence_rows:
                 cl = row["cluster"]
                 sub = adata.obs["leiden"].astype(str) == cl
-                row["auto_label"] = str(adata.obs.loc[sub, "celltypist_label"].mode().iloc[0]) if sub.any() else None
+                row["auto_label"] = (
+                    str(adata.obs.loc[sub, "scagent_annotation"].mode().iloc[0])
+                    if "scagent_annotation" in adata.obs and sub.any()
+                    else str(adata.obs.loc[sub, "celltypist_label"].mode().iloc[0]) if sub.any() else None
+                )
                 row["fused"] = str(adata.obs.loc[sub, "cell_type"].mode().iloc[0]) if sub.any() else None
                 row["conflict"] = bool(adata.obs.loc[sub, "annotation_conflict"].any()) if "annotation_conflict" in adata.obs else False
         Path("annotation_evidence.json").write_text(json.dumps(evidence_rows, indent=2), encoding="utf-8")
         __PSEUDOBULK__
         color_cols = ["cell_type", "marker_label", "deg_label", "cell_type_l1", "annotation_status"]
+        if "scagent_annotation" in adata.obs:
+            color_cols.append("scagent_annotation")
         if "celltypist_label" in adata.obs:
             color_cols.append("celltypist_label")
         if "ref2_label" in adata.obs:
@@ -865,6 +987,8 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             "integration_passed": integ_passed,
             "integration_plots": integ_plots,
             "celltypist_model": adata.uns.get("celltypist_model"),
+            "scagent_annotation_method": (adata.uns.get("scagent_annotation") or {{}}).get("method"),
+            "scagent_annotation_n_low_conf": (adata.uns.get("scagent_annotation") or {{}}).get("n_low_conf"),
             "deg_engine": (adata.uns.get("pseudobulk_de") or {{}}).get("engine"),
             "deg_n_sig": (adata.uns.get("pseudobulk_de") or {{}}).get("n_sig"),
             "deg_engines": (adata.uns.get("pseudobulk_de") or {{}}).get("engines"),
@@ -883,6 +1007,8 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             "trajectory_methods": (adata.uns.get("scagent_trajectory") or {{}}).get("methods"),
             "trajectory_score": (adata.uns.get("scagent_trajectory") or {{}}).get("score"),
             "trajectory_confidence": (adata.uns.get("scagent_trajectory") or {{}}).get("confidence"),
+            "adata_in": adata_in_summary,
+            "adata_out": summarize_adata(adata, step="processed_output"),
         }
         print("SCAGENT_METRICS:" + json.dumps(metrics))
         Path("downstream_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
@@ -892,10 +1018,11 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
     )
     return (
         tpl.replace("__SAMPLE_KEY__", sample_key)
+        .replace("__ROUTER_DN__", _router_downstream_bootstrap(meta, plan or {}))
         .replace("__INTEGRATE__", integrate.strip("\n"))
         .replace("__RES_BLOCK__", res_block.strip("\n"))
         .replace("__DE_BLOCK__", _de_block(marker_method, deg_cv).strip("\n"))
-        .replace("__PSEUDOBULK__", _pseudobulk_block(needs_pb, condition_key, sample_key, deg_engine, deg_cv).strip("\n"))
+        .replace("__PSEUDOBULK__", _pseudobulk_block(needs_pb, condition_key, sample_key, deg_engine, deg_cv, force_pb).strip("\n"))
         .replace("__CELLTYPIST__", _celltypist_block(ct_model).strip("\n"))
         .replace("__SECOND_REF__", _second_ref_block().strip("\n"))
         .replace("__TRAJECTORY__", _trajectory_block(traj_mode).strip("\n"))

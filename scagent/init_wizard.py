@@ -112,9 +112,9 @@ def collect_session(
         _ask("真正执行脚本？y=执行 / n=只生成脚本", "n", key="execute", answers=answers, use_defaults=use_defaults, input_fn=ask),
         False,
     )
-    language = _ask("分析语言 python / r", "python", key="language", answers=answers, use_defaults=use_defaults, input_fn=ask).lower()
-    if language not in {"python", "r"}:
-        language = "python"
+    language = _ask("分析语言 r_first / python / r", "r_first", key="language", answers=answers, use_defaults=use_defaults, input_fn=ask).lower()
+    if language not in {"python", "r", "r_first"}:
+        language = "r_first"
     report_lang = _ask("报告语言 zh / en / both", "zh", key="report_lang", answers=answers, use_defaults=use_defaults, input_fn=ask).lower()
     if report_lang not in {"zh", "en", "both"}:
         report_lang = "zh"

@@ -70,6 +70,12 @@ def phase_conclusion(state: dict, phase: str, lang: str | None = None) -> str:
             )
             if m.get("doublet_rate") is not None:
                 lines.append(f"{'双细胞比例' if zh else 'doublet rate'}: {m['doublet_rate']}")
+            if m.get("doublet_n_high_conf") is not None:
+                lines.append(
+                    f"{'双细胞分级' if zh else 'doublet tiers'}: "
+                    f"high={m.get('doublet_n_high_conf')} low={m.get('doublet_n_low_conf')} "
+                    f"filter={m.get('doublet_filter') or 'high_conf'}"
+                )
         elif not ran:
             lines.append(pending)
         return "\n".join(x for x in lines if x).strip() + "\n"
@@ -250,6 +256,16 @@ def render_dual_markdown(
             lines.append(f"`{b['script']}`")
             lines.append("")
         lines += [f"```{fence}", (b.get("code") or "").rstrip(), "```", ""]
+    from scagent.publication_figures import render_publication_figure_inventory_markdown
+
+    inv_md = render_publication_figure_inventory_markdown(state or {}, lang=use).rstrip()
+    if inv_md:
+        lines += [
+            f"## {'发表级图表清单' if zh else 'Publication figure checklist'}",
+            "",
+            inv_md,
+            "",
+        ]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -278,5 +294,5 @@ def export_dual(state: dict, out_dir: Path) -> Path:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "dual.md"
-    path.write_text(render_dual_markdown(state), encoding="utf-8")
+    path.write_text(render_dual_markdown(state, lang=state.get("report_lang")), encoding="utf-8")
     return path

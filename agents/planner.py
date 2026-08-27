@@ -9,8 +9,10 @@ from agents.markers import choose_celltypist_model
 from agents.roles import assign_roles
 from rag.retriever import format_hits, retrieve
 from scagent.config import analysis_params, load_config
+from scagent.deg_methods import force_pseudobulk_de, parse_deg_preference, resolve_forced_deg_engine
 from scagent.preprocess import choose_ambient
 from scagent.skills_loader import recommend_skills, skill_catalog_text
+from scagent.tool_router import analysis_language, build_tool_route
 
 SCVI_CELL_CUTOFF = 100_000
 SCVI_SAMPLE_CUTOFF = 8
@@ -70,7 +72,8 @@ def explain_integrator(meta: dict, requested: str | None, chosen: str | None) ->
 
 def build_plan(state: dict) -> dict:
     meta = dict(state.get("metadata") or {})
-    language = state.get("language") or "python"
+    cfg = load_config()
+    language = state.get("language") or analysis_language(cfg)
     if state.get("batch_key"):
         meta["sample_key"] = state["batch_key"]
         meta["need_batch_correction"] = True
@@ -80,7 +83,6 @@ def build_plan(state: dict) -> dict:
         meta["markers_path"] = state["markers_path"]
 
     r_degraded = language == "r"
-    cfg = load_config()
     requested = state.get("integrator") or (cfg.get("modules") or {}).get("batch") or "auto"
     req_l = str(requested).lower()
     if meta.get("batch_condition_confounded") and req_l not in {"harmony", "scvi", "cca", "bbknn", "scanorama"}:
@@ -98,6 +100,9 @@ def build_plan(state: dict) -> dict:
     needs_pb = False if r_degraded else bool(intent.get("condition_comparison") or "deg" in (intent.get("intents") or []))
     if state.get("condition_key"):
         meta["condition_key"] = state["condition_key"]
+        needs_pb = True
+    if force_pseudobulk_de(meta):
+        meta["force_pseudobulk_de"] = True
         needs_pb = True
     ct_model = None if r_degraded else choose_celltypist_model(meta.get("tissue"), meta.get("species"))
     resolution = state.get("resolution")
@@ -129,9 +134,12 @@ def build_plan(state: dict) -> dict:
             r_degraded=False,
         )
 
-    from scagent.deg_methods import parse_deg_preference
-
     pref = parse_deg_preference(state.get("user_query"))
+    tool_route = build_tool_route(
+        meta,
+        {"needs_pseudobulk": needs_pb, "integrator": integrator, "route": route if not r_degraded else []},
+        cfg=cfg,
+    )
     plan = {
         "objective": state.get("user_query") or "标准 scRNA-seq 分析",
         "species": meta.get("species"),
@@ -146,7 +154,13 @@ def build_plan(state: dict) -> dict:
         "imputation": imputation or "none",
         "ambient": ambient,
         "needs_pseudobulk": needs_pb,
-        "deg_engine": state.get("deg_engine") or pref.get("engine") or (cfg.get("deg") or {}).get("engine") or "auto",
+        "force_pseudobulk_de": bool(meta.get("force_pseudobulk_de") or force_pseudobulk_de(meta)),
+        "n_replicates": meta.get("n_replicates"),
+        "deg_engine": resolve_forced_deg_engine(
+            state.get("deg_engine") or pref.get("engine") or (cfg.get("deg") or {}).get("engine") or "auto"
+        )
+        if force_pseudobulk_de(meta)
+        else (state.get("deg_engine") or pref.get("engine") or (cfg.get("deg") or {}).get("engine") or "auto"),
         "marker_method": state.get("marker_method") or pref.get("marker_method") or (cfg.get("deg") or {}).get("marker_method") or "auto",
         "deg_cross_validate": (
             state.get("deg_cross_validate")
@@ -169,6 +183,7 @@ def build_plan(state: dict) -> dict:
         "agents": assign_roles(route),
         "risks": [],
         "rag_excerpt": rag,
+        "tool_route": tool_route,
     }
     if state.get("selection"):
         sel = state["selection"] or {}
@@ -199,6 +214,10 @@ def build_plan(state: dict) -> dict:
         plan["risks"].append("MAST 是细胞水平 hurdle 模型，不是样本水平检验；组间结论仍走 pseudobulk + FDR。")
     if plan.get("deg_cross_validate") not in {False, "off", "false"}:
         plan["risks"].append("DEG/marker 将跑第二检验做交叉验证；共识基因比单方法列表更稳，仍不是因果。")
+    if plan.get("force_pseudobulk_de"):
+        plan["risks"].append(
+            "检测到 condition_key 且生物学重复 n_replicates≥2：禁止 cell-level Wilcoxon 作组间结论，强制 pseudobulk + DESeq2/edgeR。"
+        )
     if language != "r":
         llm = run_specialist(
             read_prompt("planner"),
@@ -206,7 +225,7 @@ def build_plan(state: dict) -> dict:
                 f"用户任务: {state.get('user_query')}\n"
                 f"metadata: {json.dumps(meta, ensure_ascii=False)}\n"
                 f"integrator={integrator}\n"
-                f"可选 skills:\n{skill_catalog_text()}\n"
+                f"可选 skills:\n{skill_catalog_text(metadata=meta, query=state.get('user_query'))}\n"
                 f"RAG:\n{rag}\n"
                 "这是 Plan-and-Solve + 多智能体：Planner 只分工，QC / 聚类DEG / 解读 / 代码审计各司其职。"
                 "禁止在 PCA/neighbors/UMAP/Leiden 之前做 DE 或 DPT/Monocle3。"

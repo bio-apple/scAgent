@@ -50,6 +50,7 @@ def build_qc_strategy(state: dict) -> dict:
     remove_doublets = bool(state.get("remove_doublets"))
     if state.get("remove_doublets") is None:
         remove_doublets = bool(qc_cfg_full.get("remove_doublets"))
+    doublet_filter = str(state.get("doublet_filter") or qc_cfg_full.get("doublet_filter") or "high_conf")
     regress_cc = state.get("regress_cell_cycle") or qc_cfg_full.get("regress_cell_cycle") or "auto"
     extra_qc = list(prof.get("extra_qc") or [])
     if meta.get("need_hb_qc") and "hb" not in extra_qc:
@@ -72,6 +73,7 @@ def build_qc_strategy(state: dict) -> dict:
         "pct_mt_note": prof.get("pct_mt_note", ""),
         "doublets": True,
         "remove_doublets": remove_doublets,
+        "doublet_filter": doublet_filter,
         "doublet_methods": doublet_req,
         "doublet_methods_resolved": doublet_resolved,
         "ambient": ambient,
@@ -88,8 +90,13 @@ def build_qc_strategy(state: dict) -> dict:
             "2. MAD 和/或 percentile 动态阈值；硬阈值仅当 config.qc.hard 非 null\n"
             f"3. pct_mt 单侧高；记录过滤比例，>{warn_pct}% 警告；组织说明：{prof.get('pct_mt_note') or ''}\n"
             f"4. 双细胞：Scrublet"
-            + (" + scDblFinder（无 R 则表达模拟）交叉验证；一致才标 doublet" if len(doublet_resolved) > 1 else "")
-            + f"；remove_doublets={remove_doublets}\n"
+            + (
+                " + scDblFinder（无 R 则表达模拟）→ doublet_call 三级："
+                "high_conf（两法一致且 score>0.8）| low_conf（仅一法）| singlet"
+                if len(doublet_resolved) > 1
+                else " → doublet_call：high_conf（score>0.8）| low_conf | singlet"
+            )
+            + f"；remove_doublets={remove_doublets} doublet_filter={doublet_filter}\n"
             f"5. ambient={ambient}；cell cycle score + regress={regress_cc}\n"
             f"6. imputation={imputation}（写入 layers['imputed']，不覆盖 X）"
         ),

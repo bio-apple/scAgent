@@ -14,6 +14,9 @@ CAPTION_EN = {
     "batch_umap_before": "UMAP from uncorrected PCA, colored by batch. Diagnostic only.",
     "batch_umap_after": "UMAP after integration, colored by batch. Mixing is not integration proof.",
     "markers": "Exploratory cluster markers (Wilcoxon/t-test/MAST). Not a between-group result (use pseudobulk + FDR).",
+    "marker_heatmap": "Exploratory cluster marker heatmap (top genes × clusters). Not a group-level DE result.",
+    "volcano": "Pseudobulk group DE volcano (logFC vs -log10 p). Interpret with FDR.",
+    "pathway_bubble": "Pathway enrichment bubble plot (ORA/GSEA; -log10 p and overlap size).",
     "annotation": "Annotation view. Read together with the dual-validation table.",
     "paga": "PAGA cluster graph. Connectivity is not proof of a biological fate.",
     "pseudotime": "Diffusion pseudotime on the neighborhood graph. Exploratory axis, not a clock.",
@@ -80,6 +83,11 @@ def _metrics_table(artifacts: dict, lang: str) -> str:
         ("imputation", "插补" if lang != "en" else "imputation"),
         ("ambient", "ambient RNA"),
         ("doublet_rate", "双细胞比例" if lang != "en" else "doublet rate"),
+        ("doublet_rate_high_conf", "高置信双细胞比例" if lang != "en" else "high-conf doublet rate"),
+        ("doublet_rate_low_conf", "低置信双细胞比例" if lang != "en" else "low-conf doublet rate"),
+        ("doublet_n_high_conf", "高置信双细胞数" if lang != "en" else "high-conf doublets"),
+        ("doublet_n_low_conf", "低置信双细胞数" if lang != "en" else "low-conf doublets"),
+        ("doublet_filter", "双细胞过滤模式" if lang != "en" else "doublet filter"),
         ("doublet_methods", "双细胞方法" if lang != "en" else "doublet methods"),
         ("deg_engine", "DEG 后端" if lang != "en" else "DEG engine"),
         ("deg_n_sig", "DEG 显著基因数" if lang != "en" else "DEG n_sig"),
@@ -103,6 +111,82 @@ def _metrics_table(artifacts: dict, lang: str) -> str:
         if k in m and m[k] is not None:
             rows.append(f"| {label} | {m[k]} |")
     return "\n".join(rows) if len(rows) > 2 else ("无结构化指标。" if lang != "en" else "No structured metrics.")
+
+
+def _doublet_tier_note(artifacts: dict, lang: str) -> str:
+    m = artifacts.get("metrics") or {}
+    if m.get("doublet_n_high_conf") is None and m.get("doublet_rate_high_conf") is None:
+        return ""
+    zh = lang != "en"
+    filt = m.get("doublet_filter") or "high_conf"
+    lines = [
+        "",
+        f"**{'双细胞置信度分级' if zh else 'Doublet confidence tiers'}**",
+        "",
+        f"- {'高置信' if zh else 'high_conf'} (`doublet_high_conf`): {m.get('doublet_n_high_conf', '—')} ({m.get('doublet_rate_high_conf', '—')})",
+        f"- {'低置信' if zh else 'low_conf'} (`doublet_low_conf`): {m.get('doublet_n_low_conf', '—')} ({m.get('doublet_rate_low_conf', '—')})",
+        f"- {'过滤模式' if zh else 'filter mode'}: `{filt}`"
+        + (
+            "（保守：仅移除高置信；低置信保留供人工判断）"
+            if zh and filt == "high_conf"
+            else (" (conservative: remove high_conf only)" if not zh and filt == "high_conf" else "")
+        )
+        + (
+            "（严格：高+低均移除）" if zh and filt == "all" else (" (strict: remove high+low)" if not zh and filt == "all" else "")
+        ),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _manifest_provenance_section(state: dict, lang: str) -> str:
+    """Summarize workspace/run_manifest.json for the publication report."""
+    import json
+
+    from scagent.config import load_config, resolve_path
+
+    path = resolve_path(load_config(), "workspace") / "run_manifest.json"
+    if not path.is_file():
+        return ""
+    try:
+        m = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    zh = lang != "en"
+    env = m.get("environment") or {}
+    seed_p = m.get("seed_propagation") or {}
+    lines = [
+        f"### {'运行清单 (run_manifest)' if zh else 'Run manifest'}",
+        "",
+        f"- `environment.hash`: `{env.get('hash', '—')}` ({', '.join(env.get('sources') or []) or 'n/a'})",
+        f"- `seed`: {m.get('seed', '—')} | master: {seed_p.get('master_seed', '—')}",
+    ]
+    steps = seed_p.get("steps") or {}
+    if steps:
+        core = ("hvg", "pca", "neighbors", "leiden", "umap")
+        lines.append(
+            "- "
+            + ("随机步骤" if zh else "stochastic steps")
+            + ": "
+            + ", ".join(f"{k}={steps.get(k)}" for k in core if k in steps)
+        )
+    prov = m.get("step_provenance") or []
+    if prov:
+        lines.append("")
+        lines.append(f"**{'步骤 I/O' if zh else 'Step I/O'}**")
+        lines.append("")
+        lines.append("| step | input n_obs | output n_obs | obs cols (out) |")
+        lines.append("|---|---:|---:|---|")
+        for row in prov:
+            inp = row.get("input") or {}
+            out = row.get("output") or {}
+            obs_out = out.get("obs_columns") or []
+            obs_txt = ", ".join(obs_out[:8]) + ("…" if len(obs_out) > 8 else "")
+            lines.append(
+                f"| {row.get('step', '—')} | {inp.get('n_obs', '—')} | {out.get('n_obs', '—')} | {obs_txt or '—'} |"
+            )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _review_block(review: dict | None, title: str) -> str:
@@ -149,6 +233,11 @@ def _one_lang(state: dict, lang: str) -> str:
         f"- risks: {'; '.join(plan.get('risks') or []) or ('无' if zh else 'none')}",
         "",
     ]
+    tr = plan.get("tool_route")
+    if tr:
+        from scagent.tool_router import format_route_table
+
+        lines += [format_route_table(tr, lang=lang), ""]
     agents = plan.get("agents") or []
     if agents:
         lines += [
@@ -172,6 +261,7 @@ def _one_lang(state: dict, lang: str) -> str:
         qc.get("protocol") or "",
         "",
         _metrics_table(artifacts, lang),
+        _doublet_tier_note(artifacts, lang),
         "",
         f"## {'整合理由' if zh else 'Integration'}",
         "",
@@ -269,6 +359,14 @@ def _one_lang(state: dict, lang: str) -> str:
         _review_block(state.get("review_qc"), "QC 代码/执行" if zh else "QC code/execution"),
         _review_block(state.get("review_downstream"), "聚类/DEG 代码/执行" if zh else "Cluster/DEG code/execution"),
         "",
+    ]
+    from scagent.publication_figures import render_publication_figure_inventory_markdown
+
+    lines += [
+        f"## {'发表级图表清单' if zh else 'Publication figure checklist'}",
+        "",
+        render_publication_figure_inventory_markdown(state, lang=lang).rstrip(),
+        "",
         f"## {'图' if zh else 'Figures'}",
         "",
         _fig_section(artifacts, lang),
@@ -312,16 +410,20 @@ def _one_lang(state: dict, lang: str) -> str:
             "## Reproducibility",
             "",
         ]
+    manifest_blk = _manifest_provenance_section(state, lang)
+    if manifest_blk:
+        lines.append(manifest_blk.rstrip())
     lines += [
         f"- thread_id: {state.get('thread_id')}",
         f"- jail: {(state.get('execution_qc') or {}).get('jail')}",
         f"- snapshots: {', '.join((state.get('execution_qc') or {}).get('snapshots') or []) or ('无' if zh else 'none')}",
         "- structured log: outputs/run_log.json",
-        "- provenance: outputs/memory.yaml（步骤与参数，不是聊天）",
-        "- dual: outputs/dual.md（每阶段 [结论] + [代码]）",
-        "- notebook: outputs/analysis.ipynb（Jupyter 执行；R 路径为 analysis.Rmd / Seurat）",
-        "- viewer: outputs/viewer.html（Plotly 框选细胞后可提问）",
-        "- decisions: outputs/decisions/mt.html、resolution.html（直方图 + 2–3 个选项）",
+        "- manifest: workspace/run_manifest.json",
+        f"- provenance: outputs/memory.yaml ({'步骤与参数' if zh else 'steps + params'})",
+        f"- dual: outputs/dual.md ({'每阶段 [结论]+[代码]' if zh else 'conclusion + code per phase'})",
+        "- notebook: outputs/analysis.ipynb",
+        "- viewer: outputs/viewer.html",
+        "- decisions: outputs/decisions/mt.html, resolution.html",
         "",
     ]
     mem = state.get("analysis_memory")
@@ -409,6 +511,7 @@ def write_run_log(state: dict, out_dir) -> None:
     from agents.memory import build_memory
     from scagent.config import analysis_params
     from scagent.export_nb import package_versions
+    from scagent.publication_figures import build_publication_figure_inventory
 
     payload = {
         "thread_id": state.get("thread_id"),
@@ -422,6 +525,7 @@ def write_run_log(state: dict, out_dir) -> None:
         "integrator": (state.get("plan") or {}).get("integrator"),
         "integrator_reason": (state.get("plan") or {}).get("integrator_reason"),
         "metrics": (state.get("artifacts") or {}).get("metrics"),
+        "publication_figures": build_publication_figure_inventory(state),
         "review_qc": {
             "passed": (state.get("review_qc") or {}).get("passed"),
             "issues": (state.get("review_qc") or {}).get("issues"),

@@ -10,6 +10,10 @@ from scagent.logutil import get_logger
 log = get_logger("doublets")
 
 COMPLEX_TISSUES = {"tumor", "brain", "heart", "kidney", "liver", "embryo"}
+HIGH_CONF_SCORE = 0.8
+TIER_HIGH = "doublet_high_conf"
+TIER_LOW = "doublet_low_conf"
+TIER_SINGLET = "singlet"
 _R_SCRIPT = Path(__file__).resolve().parent / "r" / "doublets.R"
 
 
@@ -47,6 +51,60 @@ def _consensus(a, b):
     disc = a ^ b
     agree = float(np.mean(a == b)) if len(a) else 1.0
     return both, disc, agree
+
+
+def _second_method_key(calls: dict[str, Any]) -> str | None:
+    for key in ("scdblfinder", "sim"):
+        if key in calls:
+            return key
+    return None
+
+
+def assign_doublet_tiers(calls: dict[str, Any], scores: dict[str, Any]) -> tuple[Any, dict[str, int]]:
+    """三级标签：高置信（两法一致且第二法 score>0.8）、低置信（仅一法或 score 不足）、singlet。"""
+    import numpy as np
+
+    if not calls:
+        return np.array([], dtype=object), {TIER_HIGH: 0, TIER_LOW: 0, TIER_SINGLET: 0}
+
+    n = len(next(iter(calls.values())))
+    tiers = np.full(n, TIER_SINGLET, dtype=object)
+    second = _second_method_key(calls)
+    if second and "scrublet" in calls:
+        scrub = np.asarray(calls["scrublet"], dtype=bool)
+        sec = np.asarray(calls[second], dtype=bool)
+        sec_score = np.asarray(scores[second], dtype=float)
+        both = scrub & sec
+        one_only = scrub ^ sec
+        high = both & (sec_score > HIGH_CONF_SCORE)
+        low = one_only | (both & ~high)
+        tiers[high] = TIER_HIGH
+        tiers[low] = TIER_LOW
+    else:
+        key = "scrublet" if "scrublet" in calls else next(iter(calls))
+        pred = np.asarray(calls[key], dtype=bool)
+        score = np.asarray(scores[key], dtype=float)
+        high = pred & (score > HIGH_CONF_SCORE)
+        low = pred & ~high
+        tiers[high] = TIER_HIGH
+        tiers[low] = TIER_LOW
+
+    counts = {
+        TIER_HIGH: int(np.sum(tiers == TIER_HIGH)),
+        TIER_LOW: int(np.sum(tiers == TIER_LOW)),
+        TIER_SINGLET: int(np.sum(tiers == TIER_SINGLET)),
+    }
+    return tiers, counts
+
+
+def _removal_mask(tiers, *, doublet_filter: str):
+    import numpy as np
+
+    filt = str(doublet_filter or "high_conf").lower().strip()
+    t = np.asarray(tiers, dtype=object)
+    if filt == "all":
+        return t != TIER_SINGLET
+    return t == TIER_HIGH
 
 
 def _simulate_doublet_scores(adata, *, seed: int = 0):
@@ -188,12 +246,14 @@ def detect_doublets(
     sample_key: str | None = None,
     tissue: str | None = None,
     remove: bool = False,
+    doublet_filter: str = "high_conf",
     n_samples: int | None = None,
 ):
     """Scrublet, plus scDblFinder (R) or count-simulation when cross-check is on.
 
-    Consensus `predicted_doublet` is the intersection when two methods succeed.
-    Discordant cells are flagged, not auto-removed.
+    Writes ``doublet_call`` in {doublet_high_conf, doublet_low_conf, singlet}.
+    ``predicted_doublet`` is True for any non-singlet tier (backward compatible).
+    ``remove`` uses ``doublet_filter``: high_conf=仅移除高置信；all=严格移除高+低。
     """
     import numpy as np
 
@@ -243,34 +303,43 @@ def detect_doublets(
     n = adata.n_obs
     if len(calls) >= 2:
         keys = list(calls)
-        both, disc, agree = _consensus(calls[keys[0]], calls[keys[1]])
-        pred = both
-        score = np.maximum(scores[keys[0]], scores[keys[1]])
+        _, disc, agree = _consensus(calls[keys[0]], calls[keys[1]])
         status = "ok"
     elif len(calls) == 1:
-        k = next(iter(calls))
-        pred = np.asarray(calls[k], dtype=bool)
-        score = np.asarray(scores[k], dtype=float)
         disc = np.zeros(n, dtype=bool)
         agree = 1.0
         status = "partial" if need_second else "ok"
     else:
-        pred = np.zeros(n, dtype=bool)
-        score = np.zeros(n, dtype=float)
         disc = np.zeros(n, dtype=bool)
         agree = 0.0
         status = "failed"
 
+    tiers, tier_counts = assign_doublet_tiers(calls, scores)
+    pred = tiers != TIER_SINGLET
+    score = np.zeros(n, dtype=float)
+    if scores:
+        score = np.max(np.stack([np.asarray(s, dtype=float) for s in scores.values()], axis=0), axis=0)
+
+    adata.obs["doublet_call"] = tiers
     adata.obs["predicted_doublet"] = pred
     adata.obs["doublet_score"] = score
-    adata.obs["doublet_discordant"] = disc
+    adata.obs["doublet_discordant"] = tiers == TIER_LOW
     rate = float(np.mean(pred)) if n else 0.0
+    rate_high = float(tier_counts[TIER_HIGH] / n) if n else 0.0
+    rate_low = float(tier_counts[TIER_LOW] / n) if n else 0.0
+    filt = str(doublet_filter or "high_conf").lower().strip()
     info = {
         "status": status,
         "rate": rate,
+        "rate_high_conf": round(rate_high, 4),
+        "rate_low_conf": round(rate_low, 4),
         "agreement": round(float(agree), 4),
         "methods": engines,
         "n_discordant": int(np.sum(disc)),
+        "n_high_conf": tier_counts[TIER_HIGH],
+        "n_low_conf": tier_counts[TIER_LOW],
+        "n_singlet": tier_counts[TIER_SINGLET],
+        "doublet_filter": filt,
         "remove": bool(remove),
         "n_doublets": int(np.sum(pred)),
     }
@@ -280,6 +349,10 @@ def detect_doublets(
         + status
         + " doublet_rate="
         + str(round(rate, 4))
+        + " doublet_high_conf="
+        + str(tier_counts[TIER_HIGH])
+        + " doublet_low_conf="
+        + str(tier_counts[TIER_LOW])
         + " doublet_methods="
         + ",".join(engines)
         + " doublet_agreement="
@@ -292,8 +365,9 @@ def detect_doublets(
     except Exception:
         print("SCAGENT_WARN: doublet violin skipped")
     if remove and status != "failed":
-        n_rm = int(np.sum(pred))
-        adata = adata[~pred].copy()
-        print("removed_doublets=" + str(n_rm))
+        mask = _removal_mask(tiers, doublet_filter=filt)
+        n_rm = int(np.sum(mask))
+        adata = adata[~mask].copy()
+        print("removed_doublets=" + str(n_rm) + " doublet_filter=" + filt)
     log.info("doublets %s", info)
     return adata

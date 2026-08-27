@@ -94,12 +94,14 @@ def normalize_log1p(adata, *, target_sum: float | None = None):
     return adata
 
 
-def select_hvg(adata, *, n_top_genes: int | None = None, batch_key: str | None = None, flavor: str | None = None):
+def select_hvg(adata, *, n_top_genes: int | None = None, batch_key: str | None = None, flavor: str | None = None, random_state: int | None = None):
     """HVG on raw counts with seurat_v3 when possible (Heumos 2023). Multi-batch uses batch_key union."""
     import scanpy as sc
 
-    n = n_top_genes or analysis_params()["n_hvg"]
-    flavor = flavor or analysis_params().get("hvg_flavor") or "seurat_v3"
+    p = analysis_params()
+    n = n_top_genes or p["n_hvg"]
+    rs = int(random_state if random_state is not None else p["seed"])
+    flavor = flavor or p.get("hvg_flavor") or "seurat_v3"
     kwargs: dict = {"n_top_genes": n, "subset": False, "flavor": flavor}
     if flavor == "seurat_v3" and "counts" in adata.layers:
         kwargs["layer"] = "counts"
@@ -120,7 +122,8 @@ def select_hvg(adata, *, n_top_genes: int | None = None, batch_key: str | None =
             fb["batch_key"] = batch_key
         sc.pp.highly_variable_genes(adata, **fb)
         kwargs = fb
-    log.info("select_hvg flavor=%s n=%s batch_key=%s", kwargs.get("flavor"), n, kwargs.get("batch_key"))
+    adata.uns["scagent_hvg"] = {"flavor": kwargs.get("flavor"), "n_top_genes": n, "random_state": rs}
+    log.info("select_hvg flavor=%s n=%s batch_key=%s random_state=%s", kwargs.get("flavor"), n, kwargs.get("batch_key"), rs)
     return adata
 
 

@@ -24,6 +24,7 @@ class AgentState(TypedDict, total=False):
     ambient: str | None
     remove_doublets: bool
     doublet_methods: str | None
+    doublet_filter: str | None
     condition_key: str | None
     deg_engine: str | None
     marker_method: str | None

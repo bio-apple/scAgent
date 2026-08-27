@@ -99,6 +99,143 @@ def _scatter_batch(xy, labels, path: Path, title: str) -> Path | None:
     return path
 
 
+def marker_heatmap(
+    adata,
+    *,
+    groupby: str = "leiden",
+    n_genes: int = 8,
+    save: str = "_marker_heatmap.png",
+    figdir: str | Path | None = None,
+) -> str | None:
+    """Top cluster marker heatmap (exploratory). Requires rank_genes_groups in adata.uns."""
+    import scanpy as sc
+
+    if "rank_genes_groups" not in (adata.uns or {}):
+        return None
+    if groupby not in adata.obs:
+        return None
+    d = apply_figdir(figdir)
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    sc.pl.rank_genes_groups_heatmap(
+        adata,
+        n_genes=n_genes,
+        groupby=groupby,
+        show_gene_labels=True,
+        show=False,
+    )
+    out = d / "marker_heatmap.png"
+    plt.savefig(out, bbox_inches="tight", dpi=120)
+    plt.close("all")
+    log.info("marker heatmap %s", out.name)
+    return str(out) if out.is_file() else None
+
+
+def volcano_from_de_csv(
+    csv_path: str | Path,
+    *,
+    save: str = "volcano.png",
+    figdir: str | Path | None = None,
+    fdr_cutoff: float = 0.05,
+) -> str | None:
+    """Volcano plot from pseudobulk_de.csv (gene, logFC, pval, fdr)."""
+    import csv
+
+    path = Path(csv_path)
+    if not path.is_file():
+        return None
+    rows: list[dict] = []
+    with path.open(encoding="utf-8", errors="replace", newline="") as f:
+        reader = csv.DictReader(f)
+        for rec in reader:
+            try:
+                lfc = float(rec.get("logFC") or rec.get("logfc") or "nan")
+                pval = float(rec.get("pval") or rec.get("p_value") or "nan")
+                fdr = float(rec.get("fdr") or rec.get("padj") or pval)
+            except (TypeError, ValueError):
+                continue
+            if lfc != lfc or pval != pval:
+                continue
+            rows.append({"gene": rec.get("gene") or "", "logFC": lfc, "pval": max(pval, 1e-300), "fdr": fdr})
+    if not rows:
+        return None
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    out_dir = _figdir(figdir)
+    out = out_dir / save
+    x = np.array([r["logFC"] for r in rows])
+    y = -np.log10(np.array([r["pval"] for r in rows]))
+    sig = np.array([r["fdr"] < fdr_cutoff for r in rows])
+    fig, ax = plt.subplots(figsize=(5.5, 4.8), dpi=120)
+    ax.scatter(x[~sig], y[~sig], s=8, alpha=0.45, c="#94a3b8", linewidths=0)
+    ax.scatter(x[sig], y[sig], s=10, alpha=0.75, c="#dc2626", linewidths=0)
+    ax.axhline(-np.log10(0.05), color="#64748b", lw=0.8, ls="--")
+    ax.set_xlabel("log2 FC")
+    ax.set_ylabel("-log10(p-value)")
+    ax.set_title("Pseudobulk DEG volcano")
+    top = sorted(rows, key=lambda r: r["fdr"])[:8]
+    for r in top:
+        if r["fdr"] >= fdr_cutoff:
+            break
+        idx = rows.index(r)
+        ax.annotate(str(r["gene"]), (x[idx], y[idx]), fontsize=7, alpha=0.85)
+    fig.tight_layout()
+    fig.savefig(out)
+    plt.close(fig)
+    log.info("volcano plot %s", out.name)
+    return str(out)
+
+
+def pathway_bubble_plot(
+    terms: list[dict],
+    *,
+    save: str = "pathway_bubble.png",
+    figdir: str | Path | None = None,
+    top_n: int = 15,
+    fdr_cutoff: float = 0.05,
+) -> str | None:
+    """Bubble plot: y=pathway, x=-log10(p), size=overlap."""
+    if not terms:
+        return None
+    ranked = sorted(terms, key=lambda t: float(t.get("fdr") or t.get("pval") or 1.0))[:top_n]
+    if not ranked:
+        return None
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    out_dir = _figdir(figdir)
+    out = out_dir / save
+    labels = [str(t.get("term") or t.get("name") or "?")[:48] for t in ranked]
+    pvals = np.array([max(float(t.get("pval") or 1.0), 1e-300) for t in ranked])
+    sizes = np.array([max(int(t.get("overlap") or 1), 1) for t in ranked]) * 18.0
+    sig = np.array([float(t.get("fdr") or t.get("pval") or 1.0) < fdr_cutoff for t in ranked])
+    y = np.arange(len(labels))
+    fig_h = max(3.8, 0.32 * len(labels) + 1.2)
+    fig, ax = plt.subplots(figsize=(6.2, fig_h), dpi=120)
+    ax.scatter(-np.log10(pvals[~sig]), y[~sig], s=sizes[~sig], alpha=0.55, c="#64748b")
+    ax.scatter(-np.log10(pvals[sig]), y[sig], s=sizes[sig], alpha=0.85, c="#0f766e")
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_xlabel("-log10(p-value)")
+    ax.set_title("Pathway enrichment")
+    ax.invert_yaxis()
+    fig.tight_layout()
+    fig.savefig(out)
+    plt.close(fig)
+    log.info("pathway bubble %s", out.name)
+    return str(out)
+
+
 def integration_diagnostics(adata, batch_key: str, *, figdir: str | Path | None = None, max_cells: int = 8000) -> list[str]:
     """PCA/UMAP colored by batch, before vs after correction. Does not overwrite X_umap."""
     import numpy as np

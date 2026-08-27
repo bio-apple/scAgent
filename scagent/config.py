@@ -88,6 +88,47 @@ def performance_params(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
+def dask_params(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    from scagent.performance import dask_params as _dp
+
+    return _dp(cfg)
+
+
+def gpu_params(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    from scagent.performance import gpu_params as _gp
+
+    return _gp(cfg)
+
+
+def apply_performance_overrides(
+    cfg: dict[str, Any] | None = None,
+    *,
+    dask: bool | None = None,
+    gpu: bool | None = None,
+    rapids: bool | None = None,
+) -> dict[str, Any]:
+    """Runtime overlay for performance.dask / performance.gpu (CLI --dask / --gpu / --rapids)."""
+    global _CACHE
+    base = dict(cfg or load_config())
+    perf = dict(base.get("performance") or {})
+    if dask is not None:
+        dask_cfg = dict(perf.get("dask") or {})
+        dask_cfg["enabled"] = bool(dask)
+        perf["dask"] = dask_cfg
+    if gpu is not None or rapids is not None:
+        gpu_cfg = dict(perf.get("gpu") or {})
+        if gpu is not None:
+            gpu_cfg["enabled"] = bool(gpu)
+        if rapids is not None:
+            gpu_cfg["rapids"] = bool(rapids)
+            if rapids and gpu is None:
+                gpu_cfg["enabled"] = True
+        perf["gpu"] = gpu_cfg
+    base["performance"] = perf
+    _CACHE = base
+    return base
+
+
 def resolve_path(cfg: dict[str, Any], key: str) -> Path:
     rel = cfg["paths"][key]
     p = Path(rel)

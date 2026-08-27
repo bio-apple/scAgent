@@ -368,12 +368,17 @@ def concat_samples(paths: list[Path], *, sample_key: str = "sample", **kwargs: A
     return ensure_csr(out)
 
 
-def read_h5ad(path: str | Path, *, backed: str | None | bool = None):
-    """Load h5ad. backed=True/'r' or auto when n_obs >= performance.backed_threshold_cells."""
+def read_h5ad(path: str | Path, *, backed: str | None | bool = None, use_dask: bool | None = None):
+    """Load h5ad. backed=True/'r' or auto when n_obs >= performance.backed_threshold_cells.
+    use_dask=True (or performance.dask.enabled + threshold) tags experimental Dask/out-of-core path."""
     import anndata as ad
+
+    from scagent.performance import configure_scanpy_dask, dask_params
 
     path = Path(path)
     n_obs, _n_vars = peek_h5ad_shape(path)
+    dp = dask_params()
+    want_dask = use_dask if use_dask is not None else (dp["enabled"] and n_obs is not None and n_obs >= dp["threshold_cells"])
     mode: str | None
     if backed is True:
         mode = "r"
@@ -384,8 +389,12 @@ def read_h5ad(path: str | Path, *, backed: str | None | bool = None):
         mode = "r" if (n_obs is not None and n_obs >= thr) else None
     else:
         mode = str(backed)
-    log.info("read h5ad %s backed=%s n_obs=%s", path, mode, n_obs)
+    if want_dask and mode is None and n_obs is not None:
+        mode = "r"
+    log.info("read h5ad %s backed=%s n_obs=%s dask=%s", path, mode, n_obs, want_dask)
     adata = ad.read_h5ad(path, backed=mode) if mode else ad.read_h5ad(path)
+    if want_dask:
+        configure_scanpy_dask(adata)
     if mode is None:
         ensure_csr(adata)
     elif n_obs:
