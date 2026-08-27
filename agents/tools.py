@@ -11,7 +11,7 @@ def retrieve_papers(query: str, collection: str = "papers") -> str:
     """Search the local RAG corpus. Default collection is knowledge/papers."""
     hits = retrieve(query, collection=collection)
     if not hits and collection == "papers":
-        hits = retrieve(query, collection="methods")
+        hits = retrieve(query, collections=["methods", "best_practices"])
     return format_hits(hits)
 
 

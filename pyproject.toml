@@ -27,8 +27,12 @@ analysis = [
   "harmonypy",
   "leidenalg",
   "igraph",
+  "celltypist",
+  "scikit-learn",
+  "scipy",
+  "joblib",
 ]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "flake8>=7.0", "black>=24.0"]
 
 [project.scripts]
 scagent = "scagent.cli:main"
@@ -36,6 +40,17 @@ scagent = "scagent.cli:main"
 [tool.setuptools.packages.find]
 include = ["scagent*", "agents*", "workflows*", "rag*", "sandbox*"]
 
+[tool.setuptools.package-data]
+scagent = ["r/*.R"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.flake8]
+max-line-length = 120
+extend-ignore = ["E203", "W503", "E501"]

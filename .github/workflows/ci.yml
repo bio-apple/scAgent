@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+          pip install anndata scipy h5py
+      - name: flake8
+        run: flake8 scagent tests --max-line-length=120 --extend-ignore=E203,W503,E501
+      - name: black
+        run: black --check --line-length=120 scagent/cache.py scagent/parallel.py scagent/demo.py tests/test_performance.py
+      - name: pytest
+        run: pytest -q --tb=short

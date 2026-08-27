@@ -1,0 +1,31 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%files
+    pyproject.toml /opt/scagent/pyproject.toml
+    README.md /opt/scagent/README.md
+    requirements.txt /opt/scagent/requirements.txt
+    requirements-analysis.txt /opt/scagent/requirements-analysis.txt
+    config.yaml /opt/scagent/config.yaml
+    scagent /opt/scagent/scagent
+    agents /opt/scagent/agents
+    workflows /opt/scagent/workflows
+    rag /opt/scagent/rag
+    sandbox /opt/scagent/sandbox
+    prompts /opt/scagent/prompts
+    knowledge /opt/scagent/knowledge
+    report_templates /opt/scagent/report_templates
+
+%post
+    apt-get update && apt-get install -y --no-install-recommends build-essential \
+        && rm -rf /var/lib/apt/lists/*
+    pip install --no-cache-dir -r /opt/scagent/requirements.txt
+    pip install --no-cache-dir -e "/opt/scagent[dev]"
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export SCAGENT_LOG_LEVEL=INFO
+
+%runscript
+    cd /opt/scagent
+    python -m scagent "$@"

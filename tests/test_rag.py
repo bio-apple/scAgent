@@ -12,6 +12,16 @@ def test_rag_papers_harmony():
     assert "korsunsky" in blob or "pca" in blob
 
 
+def test_rag_best_practices_qc():
+    ingest()
+    _bm25_bundle.cache_clear()
+    hits = retrieve("MAD-based filtering per sample mitochondrial", collection="best_practices", top_k=5)
+    assert hits, "expected BM25 hits from best_practices/reference"
+    blob = " ".join(h["source"] + " " + h["text"] for h in hits).lower()
+    assert "mad" in blob
+    assert "qc.md" in blob or "quality control" in blob
+
+
 def test_rag_mito_qc_chinese():
     ingest()
     _bm25_bundle.cache_clear()

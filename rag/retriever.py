@@ -54,9 +54,20 @@ def retrieve(
     top_k: int | None = None,
     collection: str | None = None,
     cfg: dict | None = None,
+    collections: list[str] | None = None,
 ) -> list[dict]:
     cfg = cfg or load_config()
     top_k = top_k or int(cfg["rag"]["top_k"])
+    weights = {"papers": 1.0, "methods": 0.85, "markers": 1.25, "best_practices": 1.15}
+    if collections:
+        merged: list[dict] = []
+        for col in collections:
+            for hit in retrieve(query, top_k=top_k, collection=col, cfg=cfg):
+                hit = dict(hit)
+                hit["score"] = float(hit.get("score") or 0) * weights.get(col, 1.0)
+                merged.append(hit)
+        merged.sort(key=lambda h: h["score"], reverse=True)
+        return merged[:top_k]
     default = collection or cfg["rag"].get("default_collection") or "papers"
     path = ensure_index(cfg)
     mtime = path.stat().st_mtime if path.exists() else 0.0

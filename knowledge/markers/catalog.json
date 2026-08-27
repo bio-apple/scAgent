@@ -1,0 +1,43 @@
+{
+  "tissues": {
+    "pbmc": [
+      {"name": "Immune", "lineage": ["Immune"], "positive": ["PTPRC", "HLA-DRA"], "negative": ["EPCAM"]},
+      {"name": "T cell", "lineage": ["Immune", "T cell"], "positive": ["CD3D", "CD3E"], "negative": ["MS4A1"]},
+      {"name": "CD4 T", "lineage": ["Immune", "T cell", "CD4 T"], "positive": ["CD4", "IL7R"], "negative": ["CD8A"]},
+      {"name": "CD8 T", "lineage": ["Immune", "T cell", "CD8 T"], "positive": ["CD8A", "CD8B"], "negative": ["CD4"]},
+      {"name": "CD8 Tex", "lineage": ["Immune", "T cell", "CD8 T", "CD8 Tex"], "positive": ["CD8A", "PDCD1", "HAVCR2"], "negative": ["IL7R"]},
+      {"name": "NK", "lineage": ["Immune", "NK"], "positive": ["NKG7", "GNLY"], "negative": ["CD3D"]},
+      {"name": "B cell", "lineage": ["Immune", "B cell"], "positive": ["MS4A1", "CD79A"], "negative": ["CD3D"]},
+      {"name": "Myeloid", "lineage": ["Immune", "Myeloid"], "positive": ["LYZ", "CST3"], "negative": ["CD3D"]},
+      {"name": "CD14 monocyte", "lineage": ["Immune", "Myeloid", "CD14 monocyte"], "positive": ["CD14", "LYZ"], "negative": ["FCGR3A"]},
+      {"name": "CD16 monocyte", "lineage": ["Immune", "Myeloid", "CD16 monocyte"], "positive": ["FCGR3A", "MS4A7"], "negative": ["CD14"]},
+      {"name": "cDC", "lineage": ["Immune", "Myeloid", "cDC"], "positive": ["FCER1A", "CST3"], "negative": ["CD14"]},
+      {"name": "pDC", "lineage": ["Immune", "Myeloid", "pDC"], "positive": ["IL3RA", "CLEC4C"], "negative": ["MS4A1"]},
+      {"name": "Platelet", "lineage": ["Platelet"], "positive": ["PPBP", "PF4"], "negative": ["PTPRC"]}
+    ],
+    "brain": [
+      {"name": "Neural", "lineage": ["Neural"], "positive": ["SOX2", "SLC1A3"], "negative": ["PTPRC"]},
+      {"name": "Neuron", "lineage": ["Neural", "Neuron"], "positive": ["RBFOX3", "SNAP25"], "negative": ["AQP4"]},
+      {"name": "Astrocyte", "lineage": ["Neural", "Astrocyte"], "positive": ["AQP4", "GFAP"], "negative": ["MBP"]},
+      {"name": "Oligodendrocyte", "lineage": ["Neural", "Oligodendrocyte"], "positive": ["MBP", "PLP1"], "negative": ["AQP4"]},
+      {"name": "Microglia", "lineage": ["Immune", "Microglia"], "positive": ["CX3CR1", "P2RY12"], "negative": ["GFAP"]}
+    ],
+    "liver": [
+      {"name": "Parenchyma", "lineage": ["Parenchyma"], "positive": ["ALB", "APOA1"], "negative": ["PTPRC"]},
+      {"name": "Hepatocyte", "lineage": ["Parenchyma", "Hepatocyte"], "positive": ["ALB", "APOA1"], "negative": ["PTPRC"]},
+      {"name": "Kupffer", "lineage": ["Immune", "Kupffer"], "positive": ["CD68", "MARCO"], "negative": ["ALB"]},
+      {"name": "Endothelial", "lineage": ["Stroma", "Endothelial"], "positive": ["PECAM1", "VWF"], "negative": ["ALB"]}
+    ],
+    "kidney": [
+      {"name": "Epithelium", "lineage": ["Epithelium"], "positive": ["EPCAM", "KRT8"], "negative": ["PTPRC"]},
+      {"name": "PT", "lineage": ["Epithelium", "PT"], "positive": ["CUBN", "LRP2"], "negative": ["UMOD"]},
+      {"name": "TAL", "lineage": ["Epithelium", "TAL"], "positive": ["UMOD", "SLC12A1"], "negative": ["CUBN"]},
+      {"name": "Podocyte", "lineage": ["Epithelium", "Podocyte"], "positive": ["NPHS1", "NPHS2"], "negative": ["UMOD"]}
+    ],
+    "heart": [
+      {"name": "Cardiomyocyte", "lineage": ["Parenchyma", "Cardiomyocyte"], "positive": ["TNNT2", "MYH7"], "negative": ["PTPRC"]},
+      {"name": "Fibroblast", "lineage": ["Stroma", "Fibroblast"], "positive": ["DCN", "COL1A1"], "negative": ["TNNT2"]},
+      {"name": "Endothelial", "lineage": ["Stroma", "Endothelial"], "positive": ["PECAM1", "VWF"], "negative": ["TNNT2"]}
+    ]
+  }
+}

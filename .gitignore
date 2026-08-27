@@ -15,6 +15,9 @@ workspace/*
 outputs/*
 !outputs/.gitkeep
 knowledge/.index/
+.cache/
 *.h5ad
+!tests/data/*.h5ad
+!tests/data/**/*.h5ad
 *.rds
 *.RData

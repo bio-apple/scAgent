@@ -101,8 +101,12 @@ def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
     tissue = str(metadata.get("tissue") or "").lower()
     n_samples = int(metadata.get("n_samples") or 1)
     need_batch = bool(metadata.get("need_batch_correction")) or n_samples > 1
-    if need_batch:
-        add("harmony-batch-correction", "scvi-tools-single-cell")
+    integrator = metadata.get("integrator")
+    if need_batch or integrator:
+        if integrator == "scvi":
+            add("scvi-tools-single-cell", "harmony-batch-correction")
+        else:
+            add("harmony-batch-correction", "scvi-tools-single-cell")
     add("single-cell-annotation-guide", "celltypist-cell-annotation")
     if tissue in {"pbmc", "blood", "immune"} or metadata.get("use_popv"):
         add("popv-cell-annotation")

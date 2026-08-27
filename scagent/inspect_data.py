@@ -85,13 +85,25 @@ def inspect_data(
             genes = [str(g) for g in adata.var_names[:5000]]
             if species is None:
                 meta["species"] = _detect_species_from_genes(genes)
-            for key in ("sample", "batch", "donor", "orig.ident", "orig_ident"):
+            preferred = None
+            if extra:
+                preferred = extra.get("sample_key") or extra.get("batch_key")
+            keys = [k for k in (preferred, "sample", "batch", "donor", "orig.ident", "orig_ident") if k]
+            for key in keys:
                 if key in adata.obs.columns:
                     n = int(adata.obs[key].nunique())
                     meta["sample_key"] = key
                     meta["n_samples"] = n
                     meta["need_batch_correction"] = n > 1
                     break
+            try:
+                from scagent.config import performance_params
+
+                meta["backed_recommended"] = int(meta.get("n_cells") or 0) >= int(
+                    performance_params()["backed_threshold_cells"]
+                )
+            except Exception:
+                meta["backed_recommended"] = False
             try:
                 adata.file.close()
             except Exception:
@@ -101,9 +113,18 @@ def inspect_data(
         except Exception as exc:  # pragma: no cover - IO edge
             meta["notes"].append(f"读取 h5ad 失败: {exc}")
 
+    elif path.suffix.lower() in {".rds", ".h5seurat"}:
+        meta["notes"].append(
+            "检测到 Seurat 对象。Python 路径用 scagent.io.read_single_cell 转为 AnnData（需 R + zellkonverter 或 rpy2）。"
+        )
+
     if meta["n_samples"] > 1:
         meta["need_batch_correction"] = True
     return meta
+
+
+detect_species_from_genes = _detect_species_from_genes
+detect_platform = _detect_platform
 
 
 def metadata_json(meta: dict[str, Any]) -> str:

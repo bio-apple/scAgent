@@ -5,9 +5,29 @@ model:
   name: gpt-4o-mini
   # 兼容 OpenAI 接口的网关，例如 https://api.deepseek.com/v1
   base_url: null
-  api_key_env: OPENAI_API_KEY
+  api_key_env: OPENAI_API_KEY   # 密钥只放环境变量，不要写进本文件
   temperature: 0.1
+  max_tokens: 4096
   max_tool_rounds: 4
+  max_retries: 4
+  retry_backoff_seconds: 1.0
+  retry_backoff_max: 30
+  rate_limit_rpm: 60
+
+logging:
+  level: INFO                   # DEBUG | INFO | WARNING | ERROR
+  file: outputs/scagent.log
+
+# 分析超参：改这里，不要在 Notebook / 主代码里写死
+params:
+  n_pcs: 40
+  n_neighbors: 15
+  n_hvg: 2000
+  leiden_resolution: null       # null 则扫描 leiden_resolutions
+  leiden_resolutions: [0.2, 0.4, 0.6, 0.8, 1.0]
+  target_sum: 10000
+  scale_max_value: 10
+
 
 paths:
   skills: skills
@@ -15,37 +35,85 @@ paths:
   workspace: workspace
   outputs: outputs
   index: knowledge/.index
+  cache: .cache
+
+# 大规模：backed 读盘；CSR 稀疏；n_jobs 给 Scanpy/joblib。中断后从 .cache/ 续跑。
+performance:
+  n_jobs: -1                      # -1 = 全部 CPU；1 = 串行
+  backed_threshold_cells: 250000  # ≥ 此细胞数时 h5ad 用 backed='r'
+  cache: true
 
 rag:
   top_k: 6
   chunk_size: 900
   chunk_overlap: 120
-  # 默认检索 papers；methods / markers 作为补充知识源一并入库
+  # 默认检索 papers；methods / markers / best_practices 作为补充知识源一并入库
   default_collection: papers
   collections:
     - papers
     - methods
     - markers
+    - best_practices
+  collection_dirs:
+    best_practices: best_practices/reference
 
 analysis:
-  language: python   # python（现有 skills 主路径）| r
+  language: python   # python（现有 skills 主路径）| r（仅规划，不生成 Seurat 代码）
   max_review_retries: 2
   execute_code: false
   timeout_seconds: 600
+  seed: 0
+
+# 过滤：禁止默认 mito%<5 / nFeature>200。组织差异走 qc_profiles + 动态方法。
+qc:
+  method: mad                 # mad | percentile | hybrid
+  percentile:
+    n_genes_low: 2
+    n_genes_high: 98
+    total_counts_low: 2
+    total_counts_high: 98
+    pct_mt_high: 98           # 单侧：只滤高线粒体
+  # 仅当用户显式填写时才启用硬阈值；保持 null 即不套用
+  hard:
+    pct_mt: null
+    n_genes_min: null
+    n_genes_max: null
+  overfilter_warn_pct: 30
+
+# 可选模块。batch=auto 时由样本数/细胞数选择；none 表示不做整合。
+# cca：Python 用 Scanorama（MNN/CCA 风格）；真正的 Seurat CCA 需 R，本仓库不生成半成品 Seurat。
+modules:
+  batch: auto                 # auto | none | harmony | scvi | cca
+  imputation: none            # none | magic | alra
 
 qc_profiles:
   pbmc:
     pct_mt_note: "外周血线粒体通常较低，先看分布再定阈值，常见起点约 5–10%。"
     extra_qc: ["hb"]
+    nmads: 5
   tumor:
     pct_mt_note: "肿瘤/高代谢组织线粒体可偏高；过度过滤会丢掉真实生物学（Yates 2025）。"
     extra_qc: []
+    nmads: 6
+    ambient: true
   brain:
     pct_mt_note: "脑组织 ambient RNA 与线粒体分布需一起看，避免固定 5% cutoff。"
     extra_qc: []
+    ambient: true
   heart:
     pct_mt_note: "心肌细胞线粒体天然偏高，MAD 阈值应放宽并在报告中声明。"
     extra_qc: []
+    nmads: 6
+  liver:
+    pct_mt_note: "肝实质细胞线粒体可偏高；先看分布。"
+    extra_qc: []
+  kidney:
+    pct_mt_note: "肾组织按分布 + MAD，不强套血液阈值。"
+    extra_qc: []
+  embryo:
+    pct_mt_note: "胚胎组织细胞类型复杂，过滤宜保守，保留稀有谱系。"
+    extra_qc: []
+    nmads: 6
   default:
     pct_mt_note: "不套固定 cutoff。先看 violin / scatter / barcode rank，再用 MAD。"
     extra_qc: []

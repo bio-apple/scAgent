@@ -1,16 +1,32 @@
 from __future__ import annotations
 
 import os
+import random
+import time
 from typing import Any
 
-from scagent.config import REPO_ROOT, load_config
+from scagent.config import load_config
+from scagent.cache import llm_key, load_json, save_json
+from scagent.logutil import get_logger, timed
 
-PROMPTS = REPO_ROOT / "prompts"
+
+def _prompts():
+    from scagent.config import REPO_ROOT
+
+    return REPO_ROOT / "prompts"
 
 
 def read_prompt(name: str) -> str:
-    path = PROMPTS / f"{name}.md"
-    return path.read_text(encoding="utf-8")
+    return (_prompts() / f"{name}.md").read_text(encoding="utf-8")
+
+
+log = get_logger("llm")
+_last_call = 0.0
+_tokens = {"input": 0, "output": 0, "total": 0}
+
+
+def token_usage() -> dict[str, int]:
+    return dict(_tokens)
 
 
 def get_llm(cfg: dict | None = None):
@@ -26,11 +42,93 @@ def get_llm(cfg: dict | None = None):
         "model": os.getenv("OPENAI_MODEL") or model_cfg["name"],
         "api_key": api_key,
         "temperature": float(model_cfg.get("temperature") or 0),
+        "max_retries": 0,
     }
     base_url = os.getenv("OPENAI_BASE_URL") or model_cfg.get("base_url")
     if base_url:
         kwargs["base_url"] = base_url
+    max_tokens = model_cfg.get("max_tokens")
+    if max_tokens:
+        kwargs["max_tokens"] = int(max_tokens)
     return ChatOpenAI(**kwargs)
+
+
+def _retryable(exc: BaseException) -> bool:
+    name = type(exc).__name__.lower() + str(exc).lower()
+    keys = ("ratelimit", "rate limit", "timeout", "connection", "429", "503", "502", "overloaded", "unavailable")
+    return any(k in name for k in keys)
+
+
+def _rate_limit(cfg: dict) -> None:
+    global _last_call
+    rpm = float((cfg.get("model") or {}).get("rate_limit_rpm") or 0)
+    if rpm <= 0:
+        return
+    wait = 60.0 / rpm
+    gap = time.monotonic() - _last_call
+    if gap < wait:
+        time.sleep(wait - gap)
+    _last_call = time.monotonic()
+
+
+def _log_tokens(ai: Any) -> None:
+    meta = getattr(ai, "usage_metadata", None) or {}
+    inp = int(meta.get("input_tokens") or meta.get("prompt_tokens") or 0)
+    out = int(meta.get("output_tokens") or meta.get("completion_tokens") or 0)
+    tot = int(meta.get("total_tokens") or (inp + out))
+    _tokens["input"] += inp
+    _tokens["output"] += out
+    _tokens["total"] += tot
+    if tot:
+        log.info("tokens this call in=%s out=%s total=%s | session total=%s", inp, out, tot, _tokens["total"])
+
+
+def invoke_llm(model, messages, cfg: dict | None = None):
+    cfg = cfg or load_config()
+    mcfg = cfg.get("model") or {}
+    use_cache = True
+    if cfg.get("performance") is not None:
+        use_cache = bool((cfg.get("performance") or {}).get("cache", True))
+    else:
+        from scagent.cache import cache_enabled
+
+        use_cache = cache_enabled()
+    ck = llm_key(messages)
+    if use_cache:
+        cached = load_json(ck)
+        if isinstance(cached, dict) and "content" in cached:
+
+            class _Hit:
+                content = cached["content"]
+                usage_metadata = {}
+                tool_calls = []
+
+            log.info("LLM cache hit %s", ck)
+            return _Hit()
+    retries = int(mcfg.get("max_retries") or 4)
+    base = float(mcfg.get("retry_backoff_seconds") or 1.0)
+    cap = float(mcfg.get("retry_backoff_max") or 30.0)
+    last: BaseException | None = None
+    for attempt in range(retries + 1):
+        try:
+            _rate_limit(cfg)
+            with timed("llm.invoke", log):
+                ai = model.invoke(messages)
+            _log_tokens(ai)
+            calls = getattr(ai, "tool_calls", None) or []
+            content = ai.content
+            if use_cache and not calls and isinstance(content, str):
+                save_json(ck, {"content": content})
+            return ai
+        except Exception as exc:
+            last = exc
+            if attempt >= retries or not _retryable(exc):
+                log.error("LLM invoke failed: %s", exc)
+                raise
+            sleep = min(cap, base * (2**attempt)) + random.uniform(0, 0.3)
+            log.warning("LLM retry %s/%s in %.1fs (%s)", attempt + 1, retries, sleep, type(exc).__name__)
+            time.sleep(sleep)
+    raise last  # pragma: no cover
 
 
 def run_specialist(system_prompt: str, user_text: str, cfg: dict | None = None) -> str | None:
@@ -47,7 +145,7 @@ def run_specialist(system_prompt: str, user_text: str, cfg: dict | None = None) 
     model = llm.bind_tools(TOOLS)
     messages: list = [SystemMessage(content=system_prompt), HumanMessage(content=user_text)]
     for _ in range(max_rounds):
-        ai = model.invoke(messages)
+        ai = invoke_llm(model, messages, cfg)
         messages.append(ai)
         calls = getattr(ai, "tool_calls", None) or []
         if not calls:

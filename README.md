@@ -1,90 +1,198 @@
 # Single-Cell RNA-seq Analysis Agent
 
-基于 LangGraph 的单细胞生信分析智能体：调度 → 动态 QC → 代码生成 → 审查纠错 → 注释 → 报告。  
-RAG 默认检索 `knowledge/papers`。仓库里现有的 SciAgent-style skills **保持原样**，作为可执行 SOP。
+LangGraph 单细胞生信智能体。相对 CellAgent / 泛用 SciAgent-Skills，这里强制 **组织感知 QC + 执行结果审查 + 可审计脚本**（不只是生成教程代码）。
 
-## 目录
+现有 SciAgent-style skills **原样保留**。RAG 默认检索 `knowledge/papers`，并索引 `best_practices/reference/`（Heumos 2023 / sc-best-practices / 10x 步骤摘要）。
 
-```
-scAgent/
-├── agents/                     # 智能体
-│   ├── planner.py              # 读 metadata，判断物种 / 平台（10x/Parse）/ 多样本，决定路线
-│   ├── qc_expert.py            # 组织感知 QC；必须含 Violin、Scatter、MAD
-│   ├── bio_coder.py            # 主语言 Python/Scanpy（对齐现有 skills）；R/Seurat 为显式备选
-│   ├── annotation.py           # Marker + 参考映射，禁止单基因定论
-│   ├── reviewer.py             # 统计规范、过聚类、假整合、DEG 多重校正
-│   └── writer.py               # 报告；不解释不存在的现象；图注
-├── skills/                     # 已有 SOP（不要拆到 R/python 子目录）
-│   ├── scanpy-scrna-seq/
-│   ├── anndata-data-structure/
-│   ├── harmony-batch-correction/
-│   ├── scvi-tools-single-cell/
-│   ├── celltypist-cell-annotation/
-│   ├── popv-cell-annotation/
-│   ├── cellxgene-census/
-│   └── single-cell-annotation-guide/
-├── knowledge/                  # RAG 语料
-│   ├── papers/                 # 默认检索集合（可再放入 PDF）
-│   ├── methods/
-│   └── markers/
-├── workflows/
-│   ├── state.py
-│   └── scRNA_langgraph.py
-├── sandbox/executor.py
-├── prompts/
-├── report_templates/
-├── tests/
-├── config.yaml
-└── requirements.txt
+## Quick Start
+
+```bash
+pip install -r requirements.txt && pip install -e ".[dev]"
+python -m scagent demo
+python -m scagent run "demo QC + 注释" --data tests/data/tiny_100cells.h5ad --tissue pbmc --dry-run
 ```
 
-流程：
+或 4 行 Python：
 
-`inspect → planner → qc_expert → bio_coder → execute → reviewer ⇄ bio_coder → annotation → writer`
+```python
+from scagent.demo import write_tiny_h5ad
+from scagent.io import read_single_cell
+adata = read_single_cell(write_tiny_h5ad())   # 100 cells, CSR sparse
+print(adata)
+```
+
+Demo 是 100 细胞稀疏 `.h5ad`（`tests/data/tiny_100cells.h5ad`），供 CI 与本地试跑。真数据把路径换成你的 h5ad 即可。
+
+## 工作流
+
+```mermaid
+flowchart TD
+  subgraph in [输入]
+    D["h5ad / 10x / Seurat rds"]
+    Q[用户任务]
+  end
+  D --> IO["scagent.io 稀疏 CSR / 大图 backed"]
+  Q --> INS[inspect]
+  IO --> INS
+  INS --> PL[planner + RAG + skills]
+  PL -->|language=r| W[writer 仅规划]
+  PL --> QC[qc_expert]
+  QC --> CQ[bio_coder QC]
+  CQ --> EQ[execute QC]
+  EQ --> RQ[reviewer 代码+执行]
+  RQ -->|失败重试| CQ
+  RQ -->|qc-only / interrupt| W
+  RQ --> AN[annotation 双验证]
+  AN --> CD[bio_coder downstream]
+  CD --> ED["execute: PCA/Leiden/DEG n_jobs + .cache/"]
+  ED --> RD[reviewer]
+  RD -->|失败重试| CD
+  RD --> W
+  W --> OUT["outputs/report.md"]
+```
+
+Reviewer 同时看 **代码** 和 **execution**（returncode、MAD 移除比例、h5ad、figures）。  
+Annotation 产出可执行 CellTypist + ≥2 阳性 + ≥1 阴性 marker。  
+Writer 只根据 `artifacts` 写报告，缺图写「未执行」。
 
 ## 安装
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
 pip install -e ".[dev]"
+# 真跑 Scanpy 分析再装分析栈（版本见 requirements-analysis.txt）：
+pip install -r requirements-analysis.txt
+# 或 Conda（分析栈走 conda-forge，agent 锁文件走 pip）：
+# conda env create -f environment.yml && conda activate scagent && pip install -e ".[dev]"
+cp .env.example .env   # 可选。无 OPENAI_API_KEY 时为确定性模板模式
 ```
 
-可选：分析栈 `pip install -e ".[analysis]"`。  
-LLM 可选。未配置 `OPENAI_API_KEY` 时走确定性规划 + Scanpy 模板，图仍可跑通。
+容器（agent 运行时，不含完整 Scanpy/R）：
 
 ```bash
-cp .env.example .env   # 填写 OPENAI_API_KEY；兼容 OpenAI 接口可设 OPENAI_BASE_URL
+docker build -t scagent .
+docker run --rm scagent
+# Apptainer / Singularity
+# apptainer build scagent.sif apptainer.def
+# apptainer run scagent.sif skills
 ```
 
-## 使用
+## 无 API Key 的确定性示例
 
 ```bash
-# 索引 knowledge/papers
 python -m scagent ingest
-
-# 检索
-python -m scagent retrieve "Harmony versus scVI"
-
-# 已有 skills
-python -m scagent skills
-
-# 规划 + 生成脚本 + 报告（默认不跑分析）
-python -m scagent run "对 PBMC 做标准分析并注释" --data /path/to/data.h5ad --tissue pbmc
-
-# 在 workspace/ 真正执行生成的代码
-python -m scagent run "..." --data /path/to/data.h5ad --execute
+python -m scagent run "对 PBMC 做标准分析并注释" --data /path/to/data.h5ad --tissue pbmc --dry-run
 ```
 
-产物：`workspace/analysis.py`、`outputs/report.md`。把 PDF 放进 `knowledge/papers/` 后重新 `ingest` 即可进入 RAG。
+产物：
+
+```
+workspace/qc_preprocess.py
+workspace/cluster_annotate.py
+workspace/reproducible_script.py
+workspace/run_manifest.json      # 种子、skill fingerprint、数据路径哈希前缀
+outputs/report.md
+```
+
+未 `--execute` 时报告会写明图未生成。真跑：
+
+```bash
+python -m scagent run "..." --data data.h5ad --tissue pbmc --execute
+```
+
+## 配置与重现
+
+路径、PCA 维数、HVG 数、Leiden resolution、LLM 重试/限速都在 `config.yaml`。**不要把 API key 写进 YAML**，只用环境变量 `OPENAI_API_KEY`（或 `model.api_key_env` 指定的名字）。
+
+```yaml
+params:
+  n_pcs: 40
+  n_neighbors: 15
+  n_hvg: 2000
+  leiden_resolution: null          # null = 扫描 leiden_resolutions
+  leiden_resolutions: [0.2, 0.4, 0.6, 0.8, 1.0]
+model:
+  max_retries: 4
+  retry_backoff_seconds: 1.0
+  rate_limit_rpm: 60
+logging:
+  level: INFO
+  file: outputs/scagent.log
+performance:
+  n_jobs: -1
+  backed_threshold_cells: 250000
+  cache: true   # 中间结果 .cache/
+```
+
+CLI `--resolution` 覆盖 `params.leiden_resolution`。日志走 `logging`（INFO/DEBUG/ERROR + 节点耗时），生成脚本里的 `SCAGENT_METRICS:` / `SCAGENT_WARN:` 仍是 stdout 协议，给 reviewer 解析。
+
+## Notebook / 程序化 API
+
+```python
+from scagent.io import read_single_cell          # .h5ad / 10x / Seurat .rds
+from scagent.preprocess import annotate_qc_genes, filter_dynamic, normalize_log1p, select_hvg
+from scagent.analysis import pca, neighbors, leiden, umap
+from scagent.plotting import qc_violin, qc_scatter
+from scagent.config import analysis_params
+
+adata = read_single_cell("data.h5ad")            # .rds 需要 R + zellkonverter，或 rpy2
+# 超参来自 config.yaml，可函数参数覆盖
+pca(adata)
+```
+
+Seurat `.rds` 走 `scagent/r/io.R`（zellkonverter）。Python 可执行路径仍是 AnnData；`--language r` 只规划、不生成半成品 Seurat。
+
+## CLI
+
+| 参数 | 作用 |
+|------|------|
+| `--dry-run` | 只写脚本 |
+| `--execute` | 在 workspace 跑脚本 |
+| `--qc-only` | 只做 QC 阶段 |
+| `--annotate-only` | 跳过 QC，需已有 `adata_qc.h5ad` |
+| `--interrupt` | QC 通过后暂停（人工看阈值），再用 `--annotate-only --yes` 继续 |
+| `--resolution` | 固定 Leiden resolution |
+| `--batch-key` | 批次列名 |
+| `--markers` | 自定义 marker CSV/JSON |
+| `--report-lang zh\|en\|both` | 报告语言 |
+| `--language r` | 仅规划 + 警告，不生成 Seurat |
+
+```bash
+python -m scagent retrieve "Harmony versus scVI"
+python -m scagent retrieve "B cell MS4A1" --collections papers,markers
+python -m scagent retrieve "pseudobulk FDR" --collections best_practices,papers
+python -m scagent skills
+```
+
+| `--integrator auto\|none\|harmony\|scvi\|cca` | 批次模块。`cca` 为 Scanorama（CCA/MNN 风格）；Seurat CCA 不自动生成 |
+| `--impute none\|magic\|alra` | Dropout 插补，写入 `layers['imputed']`，不覆盖用于 DE 的 X |
+| `--qc-method mad\|percentile\|hybrid` | 动态阈值；`config.yaml` 的 `qc.hard` 为 null 时不套 mito%<5 |
+
+把 PDF 放入 `knowledge/papers/` 后重新 `ingest`。步骤级最佳实践在 `best_practices/reference/`（QC、HVG、整合、注释、pseudobulk 等）。自定义 marker CSV 列：`cell_type,positive,negative,lineage`（`;` 分隔）。
 
 ## 设计选择
 
-- **Skills**：保留当前 `skills/*/SKILL.md`，不按 README 草稿改成 `skills/R` 与 `skills/python`。
-- **语言**：现有 skills 都是 Scanpy 生态，因此 bio_coder 默认 Python；用户传 `--language r` 时会警告缺少对等 SOP。
-- **RAG**：BM25 检索 `knowledge/papers`（同时入库 methods/markers）。不依赖外部 embedding 服务。
-- **QC**：组织 profile 在 `config.yaml`；硬性三件套 Violin / Scatter / MAD。
-- **审查**：缺 QC 三件套或多样本无整合且无理由 → 打回 bio_coder（最多 2 次）。
+- **Skills**：不拆成 `skills/R` 与 `skills/python`。fingerprint 写入 `run_manifest.json`。
+- **整合**：可选模块。单样本默认不做。`--integrator none` 可关。auto：小数据 Harmony，≥10 万细胞或 ≥8 样本 scVI。
+- **QC**：MAD / percentile / hybrid，组织 profile 可改 `nmads`。禁止默认 mito%<5。
+- **注释**：层级 lineage（Immune→T→CD8→Tex）。自动注释只是假说，marker 双验证说了算；冲突保留 marker。
+- **插补**：MAGIC / ALRA 可选，不改 DE 用的 X。
+- **配置**：路径/PCA/HVG/Leiden/LLM 重试都在 `config.yaml`；密钥只走环境变量。
+- **鲁棒性**：LLM 指数退避重试、RPM 限速、token 用量写入日志；图节点用 `logging` 而不是 print。
+- **性能**：CSR 稀疏；`n_obs ≥ backed_threshold_cells` 时 h5ad `backed='r'`；Scanpy `n_jobs` + joblib 并行 marker/DEG。
+- **缓存**：耗时步骤写入 `.cache/`（QC h5ad、聚类、LLM JSON），中断后可续跑。
+
+## 常见失败
+
+| 现象 | 处理 |
+|------|------|
+| 报告写「未执行」 | 加 `--execute`，并 `pip install -r requirements-analysis.txt` |
+| 缺少 violin/scatter | 不要删 LOCKED QC 块 |
+| `harmonypy` / CellTypist 警告 | 安装 analysis extra；脚本会降级并写 `SCAGENT_WARN` |
+| `--language r` 退出码 2 | 预期：未实现可执行 Seurat |
+| 执行失败仍进注释 | 不应发生；QC returncode≠0 会重试或停在 writer |
 
 ## 测试
 
@@ -92,4 +200,6 @@ python -m scagent run "..." --data /path/to/data.h5ad --execute
 pytest -q
 ```
 
-Skills 参考来源：[SciAgent-Skills single-cell](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell)
+有 scanpy/anndata 时会跑小型合成 h5ad 的 QC 执行测试。Push/PR 走 GitHub Actions（pytest + flake8 + black）。
+
+Skills 参考：[SciAgent-Skills single-cell](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell)
