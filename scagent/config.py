@@ -50,6 +50,7 @@ def analysis_params(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "n_pcs": int(p.get("n_pcs") or 40),
         "n_neighbors": int(p.get("n_neighbors") or 15),
         "n_hvg": int(p.get("n_hvg") or 2000),
+        "hvg_flavor": str(p.get("hvg_flavor") or "seurat_v3"),
         "leiden_resolution": p.get("leiden_resolution"),
         "leiden_resolutions": list(p.get("leiden_resolutions") or [0.2, 0.4, 0.6, 0.8, 1.0]),
         "target_sum": float(p.get("target_sum") or 1e4),

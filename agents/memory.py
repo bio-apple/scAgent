@@ -115,6 +115,7 @@ def build_memory(state: dict) -> dict[str, Any]:
         "params": {
             "n_pcs": params["n_pcs"],
             "n_hvg": params["n_hvg"],
+            "hvg_flavor": params.get("hvg_flavor"),
             "n_neighbors": params["n_neighbors"],
             "seed": params["seed"],
         },

@@ -32,7 +32,7 @@ def pca(adata, *, n_pcs: int | None = None, cache_name: str | None = None):
     if existing is not None and getattr(existing, "shape", (0, 0))[1] >= n:
         log.info("pca skip: X_pca already present n_pcs=%s", existing.shape[1])
     else:
-        sc.tl.pca(adata, n_comps=n, svd_solver="arpack")
+        sc.tl.pca(adata, n_comps=n, svd_solver="arpack", use_highly_variable=True)
         log.info("pca n_pcs=%s", n)
     if cache_name:
         from scagent.cache import save_h5ad
@@ -79,8 +79,11 @@ def rank_genes(adata, groupby: str = "leiden"):
     import scanpy as sc
 
     apply_scanpy_n_jobs()
-    sc.tl.rank_genes_groups(adata, groupby, method="wilcoxon", pts=True)
-    log.info("rank_genes_groups groupby=%s n_jobs=%s", groupby, sc.settings.n_jobs)
+    use_raw = adata.raw is not None
+    if not use_raw:
+        log.warning("rank_genes: adata.raw missing; Wilcoxon may run on scaled X")
+    sc.tl.rank_genes_groups(adata, groupby, method="wilcoxon", pts=True, use_raw=use_raw)
+    log.info("rank_genes_groups groupby=%s use_raw=%s n_jobs=%s", groupby, use_raw, sc.settings.n_jobs)
     return adata
 
 
@@ -113,6 +116,12 @@ def _aggregate_counts(adata, keys: list[str], layer: str = "counts"):
     import numpy as np
     import pandas as pd
 
+    if layer not in adata.layers:
+        if "counts_raw" in adata.layers:
+            layer = "counts_raw"
+            log.info("pseudobulk_de: using layers['counts_raw']")
+        else:
+            log.warning("pseudobulk_de: no counts layer; summing X (must be raw counts, not log1p)")
     if layer in adata.layers:
         X = adata.layers[layer]
     else:

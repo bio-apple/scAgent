@@ -94,11 +94,33 @@ def normalize_log1p(adata, *, target_sum: float | None = None):
     return adata
 
 
-def select_hvg(adata, *, n_top_genes: int | None = None):
+def select_hvg(adata, *, n_top_genes: int | None = None, batch_key: str | None = None, flavor: str | None = None):
+    """HVG on raw counts with seurat_v3 when possible (Heumos 2023). Multi-batch uses batch_key union."""
     import scanpy as sc
 
     n = n_top_genes or analysis_params()["n_hvg"]
-    sc.pp.highly_variable_genes(adata, n_top_genes=n, subset=False)
+    flavor = flavor or analysis_params().get("hvg_flavor") or "seurat_v3"
+    kwargs: dict = {"n_top_genes": n, "subset": False, "flavor": flavor}
+    if flavor == "seurat_v3" and "counts" in adata.layers:
+        kwargs["layer"] = "counts"
+    elif flavor == "seurat_v3" and "counts" not in adata.layers:
+        from scagent.inspect_data import detect_expression_layer
+
+        if detect_expression_layer(adata).get("layer") != "counts":
+            kwargs["flavor"] = "seurat"
+            log.info("select_hvg: no counts layer; fallback flavor=seurat on X")
+    if batch_key and batch_key in adata.obs and adata.obs[batch_key].nunique() > 1:
+        kwargs["batch_key"] = batch_key
+    try:
+        sc.pp.highly_variable_genes(adata, **kwargs)
+    except Exception as exc:
+        log.warning("select_hvg %s failed (%s); fallback seurat", kwargs.get("flavor"), exc)
+        fb = {"n_top_genes": n, "subset": False, "flavor": "seurat"}
+        if batch_key and batch_key in adata.obs and adata.obs[batch_key].nunique() > 1:
+            fb["batch_key"] = batch_key
+        sc.pp.highly_variable_genes(adata, **fb)
+        kwargs = fb
+    log.info("select_hvg flavor=%s n=%s batch_key=%s", kwargs.get("flavor"), n, kwargs.get("batch_key"))
     return adata
 
 

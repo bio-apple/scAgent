@@ -184,7 +184,8 @@ python -m scagent skills
 ## 设计选择
 
 - **Skills**：不拆成 `skills/R` 与 `skills/python`。fingerprint 写入 `run_manifest.json`。
-- **整合**：可选模块。单样本默认不做。`--integrator none` 可关。auto：小数据 Harmony，≥10 万细胞或 ≥8 样本 scVI。
+- **整合**：可选模块。单样本默认不做。`--integrator none` 可关。auto：小数据 Harmony，≥10 万细胞或 ≥8 样本 scVI；样本与条件 1:1 共线时跳过，避免把处理效应当批次抹掉。
+- **HVG**：默认 `flavor=seurat_v3` 在 `layers['counts']` 上选，多样本按 batch 取并集（Heumos 2023）。无 counts 则回退 `seurat`。PCA `use_highly_variable=True`。探索性 Wilcoxon 强制 `use_raw`，不在 scale 后的 X 上做。
 - **QC**：MAD / percentile / hybrid，组织 profile 可改 `nmads`。禁止默认 mito%<5。Scrublet 写入 `predicted_doublet`；脑/肿瘤默认 ambient 校正；细胞周期评分，`regress_cell_cycle: auto`。
 - **注释**：按组织选择 CellTypist 模型（不用 Immune_All 套肝脏/心脏）。第二参考交叉验证 + marker 双验证。
 - **DE**：探索性 Wilcoxon 仅用于 cluster marker；条件比较走 sample-level pseudobulk + FDR。

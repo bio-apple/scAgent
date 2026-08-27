@@ -1,3 +1,5 @@
+import pytest
+
 from agents.markers import load_marker_catalog
 from agents.planner import choose_integrator
 from agents.qc_expert import build_qc_strategy
@@ -52,6 +54,20 @@ def test_choose_integrator_optional_none():
     assert choose_integrator({"n_samples": 4, "need_batch_correction": True}, "none") is None
     assert choose_integrator({"n_samples": 1, "need_batch_correction": False}, "cca") == "cca"
     assert choose_integrator({"n_samples": 3, "need_batch_correction": True}, "auto") == "harmony"
+    assert (
+        choose_integrator(
+            {"n_samples": 4, "need_batch_correction": True, "batch_condition_confounded": True},
+            "auto",
+        )
+        is None
+    )
+    assert (
+        choose_integrator(
+            {"n_samples": 4, "need_batch_correction": True, "batch_condition_confounded": True},
+            "harmony",
+        )
+        == "harmony"
+    )
 
 
 def test_qc_strategy_reads_config_method():
@@ -59,3 +75,22 @@ def test_qc_strategy_reads_config_method():
     assert s["method"] == "hybrid"
     assert s["imputation"] == "alra"
     assert s["hard"].get("pct_mt") in (None, "null") or s["hard"].get("pct_mt") is None
+
+
+def test_inspect_flags_batch_condition_collinearity(tmp_path):
+    pytest.importorskip("anndata")
+    pytest.importorskip("numpy")
+    import numpy as np
+    from anndata import AnnData
+
+    from scagent.inspect_data import inspect_data
+
+    rng = np.random.default_rng(0)
+    adata = AnnData(rng.poisson(1.0, size=(40, 12)).astype(np.float32))
+    adata.obs["sample"] = ["s1"] * 20 + ["s2"] * 20
+    adata.obs["condition"] = ["ctrl"] * 20 + ["trt"] * 20
+    path = tmp_path / "conf.h5ad"
+    adata.write_h5ad(path)
+    meta = inspect_data(str(path), tissue="pbmc")
+    assert meta.get("batch_condition_confounded") is True
+    assert any("共线" in n for n in meta.get("notes") or [])

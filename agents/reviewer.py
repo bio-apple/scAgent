@@ -93,6 +93,12 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
             _add(records, "差异表达未声明探索-only / 组间须 pseudobulk+FDR", id="down.deg_note")
         if "rank_genes_groups" in low and not has_padj:
             _add(records, "rank_genes_groups 必须使用 pvals_adj/FDR，不能只看 raw p", id="down.padj")
+        if "rank_genes_groups" in low and "scale(" in low and "use_raw" not in low:
+            _add(records, "Wilcoxon 须 use_raw=True（或 .raw），不能在 scale 后的 X 上做", id="down.deg_scaled")
+        if metadata.get("batch_condition_confounded") and any(k in low for k in ("harmony", "scvi", "scanorama")):
+            skipped = "skip integration" in low or "跳过整合" in text or "collinear" in low
+            if not skipped:
+                _add(records, "样本与条件共线时不应整合，否则抹掉处理效应", id="down.confound")
         if "cell_type" in low and not has_dual:
             _add(records, "单基因或无双验证的细胞类型赋值", id="down.single_gene")
 

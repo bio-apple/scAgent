@@ -199,7 +199,10 @@ def _de_block(needs_pseudobulk: bool, condition_key: str, sample_key: str) -> st
     return dedent(
         """\
         # Exploratory cluster markers only (cell-level Wilcoxon). Not a between-condition result.
-        sc.tl.rank_genes_groups(adata, "leiden", method="wilcoxon", pts=True)
+        _use_raw = adata.raw is not None
+        if not _use_raw:
+            print("SCAGENT_WARN: rank_genes_groups without .raw; Wilcoxon may run on scaled X")
+        sc.tl.rank_genes_groups(adata, "leiden", method="wilcoxon", pts=True, use_raw=_use_raw)
         sc.pl.rank_genes_groups(adata, n_genes=10, save="_markers.png", show=False)
         print("Exploratory Wilcoxon only; not a group-level result. Use pvals_adj and pseudobulk + FDR for condition DE.")
         """
@@ -460,7 +463,8 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
             sc.pp.log1p(adata)
         __CELL_CYCLE__
         __IMPUTE__
-        sc.pp.highly_variable_genes(adata, n_top_genes=__N_HVG__, subset=False)
+        from scagent.preprocess import select_hvg
+        select_hvg(adata, n_top_genes=__N_HVG__, batch_key=__SAMPLE_KEY__)
         adata.raw = adata
 
         metrics = {
@@ -622,7 +626,13 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             f"""\
             resolutions = {res_list!r}
             sil_scores = {{}}
-            Xemb = adata.obsm.get("X_pca_harmony", adata.obsm["X_pca"])
+            Xemb = None
+            for _k in ("X_pca_harmony", "X_scVI", "X_scanorama", "X_pca"):
+                if _k in adata.obsm:
+                    Xemb = adata.obsm[_k]
+                    break
+            if Xemb is None:
+                Xemb = adata.obsm["X_pca"]
             for r in resolutions:
                 key = "leiden_r" + str(r)
                 sc.tl.leiden(adata, resolution=r, key_added=key)
@@ -690,7 +700,7 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         if "X_pca" in adata.obsm:
             print("SCAGENT_WARN: skip pca; X_pca exists")
         else:
-            sc.tl.pca(adata, n_comps=__N_PCS__, svd_solver="arpack")
+            sc.tl.pca(adata, n_comps=__N_PCS__, svd_solver="arpack", use_highly_variable=True)
         __INTEGRATE__
         sc.tl.umap(adata)
 

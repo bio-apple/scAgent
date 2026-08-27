@@ -15,6 +15,7 @@ def test_analysis_params_from_yaml():
     p = analysis_params(cfg)
     assert p["n_pcs"] == cfg_get(cfg, "params.n_pcs")
     assert p["n_hvg"] == 2000
+    assert p["hvg_flavor"] == "seurat_v3"
     assert p["n_neighbors"] == 15
     assert cfg_get(cfg, "missing.key", "x") == "x"
     assert cfg_get(cfg, "model.api_key_env") == "OPENAI_API_KEY"

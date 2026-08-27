@@ -65,7 +65,8 @@ def test_qc_template_passes_reviewer():
     assert 'side="high"' in code
     assert "scrublet" in code
     assert "predicted_doublet" in code
-    assert "doublet_score" in code
+    assert "select_hvg" in code
+    assert "filter_genes" in code
     r = audit_code(code, meta, phase="qc")
     assert r["has_violin"] and r["has_scatter"] and r["has_mad"] and r["has_locked"]
     assert r["passed"] is True
@@ -80,6 +81,8 @@ def test_downstream_template_dual_validation():
     assert "ref2_label" in code
     assert "positive" in code and "negative" in code
     assert "harmonypy" in code
+    assert "use_raw" in code
+    assert "use_highly_variable=True" in code
     r = audit_code(code, meta, phase="downstream")
     assert r["has_celltypist"] and r["has_dual"]
     assert r.get("has_ref2") is True
@@ -161,6 +164,23 @@ def test_audit_rejects_umap_mix_and_raw_p():
     r2 = audit_code(deg, {"tissue": "pbmc", "species": "human"}, phase="downstream")
     assert r2["passed"] is False
     assert any(rec["id"] in {"down.padj", "down.deg_note"} for rec in r2["issue_records"])
+
+
+def test_audit_rejects_wilcoxon_on_scaled_x():
+    scaled = (
+        "import scanpy as sc\nnp.random.seed(0)\n"
+        "sc.pp.scale(adata, max_value=10)\n"
+        "celltypist.annotate(adata)\n"
+        "ref2_label = adata.obs['leiden']\n"
+        "positive = ['MS4A1', 'CD79A']\n"
+        "negative = ['CD3D']\n"
+        "cell_type_l1 = 'B'\n"
+        "sc.tl.rank_genes_groups(adata, 'leiden', method='wilcoxon')\n"
+        "print('pvals_adj and exploratory Wilcoxon; use pseudobulk + FDR for condition DE')\n"
+    )
+    r = audit_code(scaled, {"tissue": "pbmc", "species": "human"}, phase="downstream")
+    assert r["passed"] is False
+    assert any(rec["id"] == "down.deg_scaled" for rec in r["issue_records"])
 
 
 def test_gene_composition_flags_hb():

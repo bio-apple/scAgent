@@ -26,6 +26,8 @@ def choose_integrator(meta: dict, requested: str | None = None) -> str | None:
     n_cells = int(meta.get("n_cells") or 0)
     if not meta.get("need_batch_correction") and n_samples <= 1:
         return None
+    if meta.get("batch_condition_confounded"):
+        return None
     if n_cells >= SCVI_CELL_CUTOFF or n_samples >= SCVI_SAMPLE_CUTOFF:
         return "scvi"
     return "harmony"
@@ -45,6 +47,8 @@ def build_plan(state: dict) -> dict:
     r_degraded = language == "r"
     cfg = load_config()
     requested = state.get("integrator") or (cfg.get("modules") or {}).get("batch") or "auto"
+    if meta.get("batch_condition_confounded") and str(requested).lower() not in {"harmony", "scvi", "cca"}:
+        meta["skip_integration_reason"] = "sample and condition are 1:1 collinear; integrating would erase the contrast"
     integrator = None if r_degraded else choose_integrator(meta, requested)
     if str(requested).lower() in {"none", "off", "skip"}:
         meta["skip_integration_reason"] = "user disabled batch module"
@@ -111,6 +115,10 @@ def build_plan(state: dict) -> dict:
         )
     if meta.get("platform") == "parse":
         plan["risks"].append("Parse 平台 barcode 与 10x 不同，加载时不要套 Cell Ranger 默认假设。")
+    if meta.get("batch_condition_confounded"):
+        plan["risks"].append(
+            "样本与条件 1:1 共线。auto 已跳过整合，避免把处理效应当批次抹掉（Luecken 2022 overcorrection）。"
+        )
     if integrator:
         plan["risks"].append(
             f"多样本选用 {integrator}（n_cells={meta.get('n_cells')}, n_samples={meta.get('n_samples')}）。"

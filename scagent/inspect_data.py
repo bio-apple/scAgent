@@ -250,6 +250,19 @@ def inspect_data(
                 if ckey in adata.obs.columns:
                     meta["condition_key"] = ckey
                     break
+            sk, ck = meta.get("sample_key"), meta.get("condition_key")
+            if sk and ck and sk in adata.obs.columns and ck in adata.obs.columns:
+                try:
+                    pairs = adata.obs[[sk, ck]].drop_duplicates()
+                    n_s = int(adata.obs[sk].nunique())
+                    n_c = int(adata.obs[ck].nunique())
+                    if n_s > 1 and n_s == n_c and len(pairs) == n_s:
+                        meta["batch_condition_confounded"] = True
+                        meta["notes"].append(
+                            "样本与条件 1:1 共线：auto 将跳过整合，以免把处理效应当批次抹掉。"
+                        )
+                except Exception:
+                    pass
             try:
                 expr = detect_expression_layer(adata)
                 meta["expression_layer"] = expr.get("layer")

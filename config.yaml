@@ -23,6 +23,7 @@ params:
   n_pcs: 40
   n_neighbors: 15
   n_hvg: 2000
+  hvg_flavor: seurat_v3           # 在 raw counts 上选 HVG（Hafemeister 2019 / Heumos 2023）；无 counts 则回退 seurat
   leiden_resolution: null       # null 则扫描 leiden_resolutions
   leiden_resolutions: [0.2, 0.4, 0.6, 0.8, 1.0]
   target_sum: 10000
