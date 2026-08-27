@@ -3,12 +3,12 @@
     scAgent/
     │
     ├── agents/                     # 智能体定义 (System Prompts, Tools)
-    │   ├── planner/                # 任务拆解与全局调度
-    │   ├── qc_expert/              # 动态质控策略制定
-    │   ├── bio_coder/              # 代码生成 (支持 R/Seurat 与 Python/Scanpy)
-    │   ├── annotation/             # 细胞注释与 Marker 校验
-    │   ├── reviewer/               # 结果评估、异常检测与代码自纠错 (Debug)
-    │   └── writer/                 # 整合图表与分析结论，生成报告
+    │   ├── planner/                # 调度核心:读取 metadata、判断物种、平台（10x/Parse）、是否多样本，然后决定分析路线
+    │   ├── qc_expert/              # 动态质控策略制定:不直接用固定阈值，而是根据组织自动推荐 QC，例如肿瘤、脑组织、PBMC 不同策略。输出必须包含 VlnPlot、Scatter、MAD 判断。
+    │   ├── bio_coder/              # 代码生成 主语言 R（Seurat)，Python:Scanpy、Squidpy（备用）
+    │   ├── annotation/             # 细胞注释与 Marker 校验,综合 Marker + CellMarker2.0 + PanglaoDB + Azimuth，不允许只看一个基因决定细胞类型。
+    │   ├── reviewer/               # 结果评估、异常检测与代码自纠错 (Debug),审核每一步是否符合统计规范，例如 DEG 是否做多重校正、批次是否真的消除、UMAP 是否过聚类。
+    │   └── writer/                 # 整合图表与分析结论，生成报告,自动写 Result，不解释不存在的现象，每张图都有 Figure legend。
     │
     ├── skills/                     # 标准操作规程 (SOP / Standard Prompting)
     │   ├── R/
@@ -39,7 +39,15 @@
     ├── tests/                      # 单元测试 (测试 Agent 是否能正确纠错)
     ├── requirements.txt            # Python 依赖
     └── config.yaml                 # 模型 API Key、内存限制、路径配置
-    
+
+# 技术栈
+
+|层 | 推荐                 |
+|-|--------------------|
+|Agent | LangGraph          |
+
+
+
 
 # skills 参考来源
 
