@@ -15,11 +15,13 @@ def build_annotation_plan(state: dict) -> dict:
     catalog = load_marker_catalog(meta.get("markers_path"), tissue=str(meta.get("tissue") or "pbmc"))
     ct_model = choose_celltypist_model(meta.get("tissue"), meta.get("species"))
     plan_in = dict(state.get("plan") or {})
+    if state.get("resolution") is not None:
+        plan_in["resolution"] = state["resolution"]
     plan_in.setdefault("celltypist_model", ct_model)
     rag = format_hits(
         retrieve(
             "CellTypist marker dual validation annotation",
-            collections=["papers", "best_practices"],
+            collections=["papers", "best_practices", "sops"],
         )
     )
     markers = format_hits(retrieve(str(meta.get("tissue") or "immune"), collection="markers"))
@@ -27,10 +29,10 @@ def build_annotation_plan(state: dict) -> dict:
     plan = {
         "tiers": [
             "Leiden 无偏聚类",
-            f"参考映射（CellTypist {ct_model or '无匹配模型'}）仅作假说",
-            "第二参考（SingleR/Azimuth/popV 或 marker Spearman）交叉验证",
+            f"参考映射（CellTypist {ct_model or '无匹配模型'}）仅作假说，禁止只调用 Azimuth",
+            "独立证据：cluster Wilcoxon 基因 ∩ catalog；可选 SingleR/popV",
             "层级 marker 双验证（≥2 阳性 + ≥1 阴性）",
-            "冲突保留 marker；跨组织不让免疫模型覆盖",
+            "三路表决融合：≥2 一致才赋值；冲突标 mixed；单路 auto 标 unvalidated",
         ],
         "forbid_single_gene": True,
         "low_confidence_cutoff": 0.5,
@@ -42,10 +44,9 @@ def build_annotation_plan(state: dict) -> dict:
         "marker_excerpt": markers,
         "code": code,
         "instructions": (
-            "层级注释 Immune→T→CD8→Tex。"
-            "自动注释（CellTypist/SingleR）只是假说；≥2 阳性 + ≥1 阴性 marker 为生物学赋值。"
-            "CellTypist 模型按组织选择；与第二参考交叉验证。冲突保留 marker。"
-            "低置信且无 marker 时标 low_conf / unvalidated。"
+            "自动注释（CellTypist）只是假说，不能只跑 Azimuth。"
+            "独立证据：cluster DE∩catalog + ≥2 阳性/≥1 阴性 marker。"
+            "fuse_annotation 多数表决：≥2 路一致才定 cell_type；冲突 mixed；单路 auto 为 unvalidated/low_conf。"
         ),
         "hierarchical": True,
     }

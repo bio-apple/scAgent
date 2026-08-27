@@ -10,7 +10,7 @@ def test_memory_records_steps_not_chat():
         "plan": {"integrator": "harmony", "celltypist_model": "Immune_All_Low.pkl", "needs_pseudobulk": False},
         "annotation_plan": {"dual_validation": True},
         "code_qc": "print('qc')",
-        "code_downstream": "celltypist.annotate(adata)\npositive = ['MS4A1']\nnegative = ['CD3D']\nref2_label = 'x'\nsc.tl.rank_genes_groups(adata, 'leiden')\n",
+        "code_downstream": "celltypist.annotate(adata)\npositive = ['MS4A1']\nnegative = ['CD3D']\nref2_label = 'x'\nfuse_annotation(adata)\nsc.tl.rank_genes_groups(adata, 'leiden')\n",
         "execution_qc": {"executed": True, "ok": True, "snapshots": [".cache/steps/qc/adata_qc.h5ad"]},
         "execution_downstream": {"executed": True, "ok": False},
         "artifacts": {
@@ -27,7 +27,7 @@ def test_memory_records_steps_not_chat():
     assert mem["qc"]["n_before"] == 1000
     assert mem["normalize"] == "normalize_total+log1p"
     assert mem["integration"] == "harmony"
-    assert mem["annotation"] == ["CellTypist", "Marker", "ref2"]
+    assert mem["annotation"] == ["CellTypist", "Marker", "ref2", "fusion"]
     assert mem["deg"] == "wilcox (exploratory)"
     assert mem["steps"]["qc"]["status"] == "ok"
     assert mem["steps"]["downstream"]["status"] == "failed"

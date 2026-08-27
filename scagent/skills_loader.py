@@ -107,11 +107,27 @@ def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
             add("scvi-tools-single-cell", "harmony-batch-correction")
         else:
             add("harmony-batch-correction", "scvi-tools-single-cell")
-    add("single-cell-annotation-guide", "celltypist-cell-annotation")
+    add("single-cell-annotation-guide", "single-cell-annotation", "celltypist-cell-annotation")
     if tissue in {"pbmc", "blood", "immune"} or metadata.get("use_popv"):
         add("popv-cell-annotation")
     if metadata.get("use_census") or "atlas" in str(metadata.get("task") or "").lower():
         add("cellxgene-census")
+    task = str(metadata.get("task") or metadata.get("query") or "").lower()
+    if any(
+        k in task
+        for k in (
+            "cellchat",
+            "cell chat",
+            "cell-cell",
+            "cell communication",
+            "ligand-receptor",
+            "ligand receptor",
+            "细胞通讯",
+            "配体受体",
+            "配体-受体",
+        )
+    ):
+        add("cellchat-cell-communication")
     if language != "python":
         # Existing skills are Python-first; keep them listed as the executable SOP.
         add("scanpy-scrna-seq")

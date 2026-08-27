@@ -10,6 +10,8 @@
 ## Method Selection
 
 - Trajectories can be linear, cyclic, tree-like, or graph-shaped.
+- **Palantir** models differentiation as a Markov process on a diffusion map; use it together with PAGA/DPT, not as a lone authority.
+- **Monocle3** learns a principal graph (`learn_graph` / `order_cells`); it is an optional R path and must not run before clustering.
 - **Slingshot** performed better for simple topologies (Saelens et al. 2019 benchmark).
 - **PAGA** and **RaceID/StemID** scored better for complex trajectories.
 - Use **dynguidelines** (dynverse) to select an applicable method based on expected topology.

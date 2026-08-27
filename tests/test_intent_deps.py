@@ -15,6 +15,7 @@ def test_standard_query_intents():
     intent = parse_intent("对 PBMC 做标准质控、聚类和注释")
     assert "qc" in intent["intents"]
     assert "annotation" in intent["intents"]
+    assert "enrichment" in intent["intents"]
     assert intent["condition_comparison"] is False
 
 
@@ -24,6 +25,9 @@ def test_deg_route_requires_annotation_groupby():
     assert "annotate" in route
     assert "pseudobulk_deg" in route
     assert route.index("qc") < route.index("annotate") < route.index("pseudobulk_deg")
+    assert route.index("pca") < route.index("leiden")
+    assert route.index("umap") < route.index("cluster_deg")
+    assert route.index("leiden") < route.index("cluster_deg")
 
 
 def test_harmony_before_neighbors():
@@ -31,3 +35,17 @@ def test_harmony_before_neighbors():
     assert "harmony" in route
     assert route.index("harmony") < route.index("neighbors")
     assert route.index("neighbors") < route.index("leiden")
+    assert route.index("umap") < route.index("annotate")
+
+
+def test_trajectory_requires_umap_and_leiden():
+    route = resolve_route(["trajectory"])
+    assert route.index("pca") < route.index("neighbors")
+    assert route.index("neighbors") < route.index("umap")
+    assert route.index("leiden") < route.index("trajectory")
+    assert route.index("umap") < route.index("trajectory")
+    from agents.dependencies import serialize_dag
+
+    dag = serialize_dag(route)
+    assert dag["loop"] == "plan-and-solve"
+    assert any(e["to"] == "trajectory" for e in dag["edges"])

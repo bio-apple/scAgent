@@ -41,7 +41,28 @@ def resolve_network(settings: dict, *, phase: str | None = None) -> bool:
         return True
     if val in {"0", "false", "no", "off"}:
         return False
-    return (phase or "") in {"downstream", "annotation"}
+    return (phase or "") in {"downstream", "annotation", "cluster_deg"}
+
+
+def _pythonpath(env: dict[str, str]) -> str:
+    from scagent.config import REPO_ROOT
+
+    pp = [str(REPO_ROOT)]
+    if env.get("PYTHONPATH"):
+        pp.append(env["PYTHONPATH"])
+    return os.pathsep.join(pp)
+
+
+def kernel_env(workspace: Path, *, seed: int) -> dict[str, str]:
+    """Env for Jupyter / unjailed Scanpy. Keeps real HOME so kernelspec works."""
+    env = {k: v for k, v in os.environ.items() if not _SECRET_RE.search(k)}
+    mpl = workspace / ".mplconfig"
+    mpl.mkdir(parents=True, exist_ok=True)
+    env["MPLCONFIGDIR"] = str(mpl)
+    env["PYTHONHASHSEED"] = str(seed)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = _pythonpath(env)
+    return env
 
 
 def isolated_env(workspace: Path, *, seed: int) -> dict[str, str]:
@@ -63,12 +84,7 @@ def isolated_env(workspace: Path, *, seed: int) -> dict[str, str]:
     env["PYTHONNOUSERSITE"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONHASHSEED"] = str(seed)
-    from scagent.config import REPO_ROOT
-
-    pp = [str(REPO_ROOT)]
-    if env.get("PYTHONPATH"):
-        pp.append(env["PYTHONPATH"])
-    env["PYTHONPATH"] = os.pathsep.join(pp)
+    env["PYTHONPATH"] = _pythonpath(env)
     return env
 
 

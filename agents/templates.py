@@ -6,7 +6,8 @@ import json
 from textwrap import dedent
 
 from agents.markers import catalog_as_python, choose_celltypist_model, load_marker_catalog
-from scagent.config import analysis_params, performance_params
+from scagent.config import analysis_params, load_config, performance_params
+from scagent.doublets import resolve_doublet_methods
 from scagent.preprocess import choose_ambient
 
 LOCKED_START = "# === SCAGENT_LOCKED_QC_START ==="
@@ -29,24 +30,22 @@ def splice_locked_qc(code: str, locked: str) -> str:
 
 def _load_block(path: str, *, n_cells: int | None = None) -> str:
     path_r = repr(path)
-    p = str(path).lower()
-    if str(path).endswith("/") or "filtered_feature_bc_matrix" in str(path):
-        return (
-            f"adata = sc.read_10x_mtx({path_r}, var_names='gene_symbols', cache=True)\n"
-            "adata.var_names_make_unique()"
-        )
-    if p.endswith(".rds") or p.endswith(".h5seurat"):
-        return (
-            "from scagent.io import read_single_cell\n"
-            f"adata = read_single_cell({path_r})"
-        )
-    thr = int(performance_params()["backed_threshold_cells"])
-    if n_cells is not None and int(n_cells) >= thr:
-        return (
-            f"adata = sc.read_h5ad({path_r}, backed='r')\n"
-            'print("SCAGENT_WARN: AnnData backed=r for large h5ad; subset is materialized after QC")'
-        )
-    return f"adata = sc.read_h5ad({path_r})"
+    spec = str(path)
+    p = spec.lower()
+    is_multi = "," in spec or any(ch in spec for ch in "*?[")
+    is_plain_h5ad = p.endswith(".h5ad") and not is_multi
+    if is_plain_h5ad:
+        thr = int(performance_params()["backed_threshold_cells"])
+        if n_cells is not None and int(n_cells) >= thr:
+            return (
+                f"adata = sc.read_h5ad({path_r}, backed='r')\n"
+                'print("SCAGENT_WARN: AnnData backed=r for large h5ad; subset is materialized after QC")'
+            )
+        return f"adata = sc.read_h5ad({path_r})"
+    return (
+        "from scagent.io import read_single_cell\n"
+        f"adata = read_single_cell({path_r})"
+    )
 
 
 def _nb_pca(p: dict) -> str:
@@ -73,32 +72,30 @@ def _ambient_block(method: str | None) -> str:
     )
 
 
-def _scrublet_block(remove_doublets: bool) -> str:
+def _doublet_block(remove_doublets: bool, methods: str, tissue: str) -> str:
     flag = "True" if remove_doublets else "False"
+    note = (
+        "# Scrublet + scDblFinder (or count-simulation) cross-check; consensus = predicted_doublet"
+        if methods == "both"
+        else "# Scrublet → predicted_doublet"
+    )
     return dedent(
         f"""\
         REMOVE_DOUBLETS = {flag}
-        adata.obs["predicted_doublet"] = False
-        adata.obs["doublet_score"] = 0.0
-        doublet_status = "ok"
-        try:
-            bk = __SAMPLE_KEY__ if adata.obs[__SAMPLE_KEY__].nunique() > 1 else None
-            sc.pp.scrublet(adata, batch_key=bk)
-            if "predicted_doublet" not in adata.obs:
-                raise RuntimeError("scrublet did not write predicted_doublet")
-        except Exception as exc:
-            doublet_status = "failed"
-            print("SCAGENT_WARN: scrublet failed (" + str(exc) + ")")
-        doublet_rate = float(np.mean(adata.obs["predicted_doublet"].astype(bool)))
-        n_doublets = int(adata.obs["predicted_doublet"].astype(bool).sum())
-        print("doublet_status=" + doublet_status + " doublet_rate=" + str(round(doublet_rate, 4)))
-        try:
-            sc.pl.violin(adata, ["doublet_score"], save="_doublet_score.png", show=False)
-        except Exception:
-            print("SCAGENT_WARN: doublet violin skipped")
-        if REMOVE_DOUBLETS and doublet_status == "ok":
-            adata = adata[~adata.obs["predicted_doublet"].astype(bool)].copy()
-            print("removed_doublets=" + str(n_doublets))
+        {note}
+        from scagent.doublets import detect_doublets
+        adata = detect_doublets(
+            adata,
+            methods={methods!r},
+            sample_key=__SAMPLE_KEY__,
+            tissue={tissue!r},
+            remove=REMOVE_DOUBLETS,
+        )
+        _dbl = adata.uns.get("doublets") or {{}}
+        doublet_rate = float(_dbl.get("rate", 0.0))
+        doublet_status = str(_dbl.get("status") or "ok")
+        doublet_agreement = _dbl.get("agreement")
+        doublet_engines = list(_dbl.get("methods") or [])
         """
     )
 
@@ -152,64 +149,56 @@ def _celltypist_block(model: str | None) -> str:
 def _second_ref_block() -> str:
     return dedent(
         """\
-        # Second reference: SingleR (rpy2) → popV → Spearman vs marker centroids (SingleR-like).
+        # Independent evidence: Wilcoxon top genes ∩ catalog (not Azimuth). SingleR/popV optional only.
         adata.obs["ref2_label"] = "unassigned"
         adata.obs["ref2_source"] = "none"
-        ref2_ok = False
         try:
             from rpy2.robjects.packages import importr
             importr("SingleR")
-            print("SCAGENT_WARN: SingleR R package present; Python AnnData bridge not wired, trying popV")
+            print("SCAGENT_WARN: SingleR present; not used as sole annotation")
         except Exception:
             pass
-        if not ref2_ok:
-            try:
-                import popv
-                from popv.preprocessing import Process_Query
-                print("SCAGENT_WARN: popV installed but needs an annotated reference; falling back")
-            except Exception:
-                pass
-        if not ref2_ok:
-            scores = {}
-            for ct in MARKERS:
-                pos = ct.get("positive") or []
-                vec = _mean(pos)
-                if vec is None:
-                    continue
-                scores[ct.get("name") or "unknown"] = vec
-            if scores:
-                names = list(scores)
-                mat = np.vstack([scores[n] for n in names])
-                # per-cell argmax of marker-centroid score (SingleR-like rank correlation proxy)
-                pick = np.argmax(mat, axis=0)
-                adata.obs["ref2_label"] = [names[i] for i in pick]
-                adata.obs["ref2_source"] = "marker_spearman"
-                ref2_ok = True
-                print("second_reference=marker_spearman (SingleR/Azimuth unavailable)")
-        if "celltypist_label" in adata.obs and ref2_ok:
-            agree = adata.obs["celltypist_label"].astype(str) == adata.obs["ref2_label"].astype(str)
-            adata.obs["ref_crossval_agree"] = agree
-            print("ref_crossval_agree=" + str(round(float(agree.mean()), 3)))
+        try:
+            import popv  # noqa: F401
+            print("SCAGENT_WARN: popV installed but needs a reference atlas; skipped as sole mapper")
+        except Exception:
+            pass
+        from scagent.annotate import deg_catalog_labels
+        deg_catalog_labels(adata, {"cell_types": MARKERS}, groupby="leiden")
+        # deg_label is independent of CellTypist/Azimuth; do not copy it onto ref2_label
+        # (that would double-count). ref2_label stays for optional SingleR/popV.
+        print("second_reference=cluster_deg_overlap (multi-evidence; not Azimuth-only)")
         """
     )
 
 
-def _de_block(needs_pseudobulk: bool, condition_key: str, sample_key: str) -> str:
-    _ = needs_pseudobulk, condition_key, sample_key
+def _trajectory_block(mode: str) -> str:
+    mode = mode or "auto"
     return dedent(
-        """\
-        # Exploratory cluster markers only (cell-level Wilcoxon). Not a between-condition result.
-        _use_raw = adata.raw is not None
-        if not _use_raw:
-            print("SCAGENT_WARN: rank_genes_groups without .raw; Wilcoxon may run on scaled X")
-        sc.tl.rank_genes_groups(adata, "leiden", method="wilcoxon", pts=True, use_raw=_use_raw)
-        sc.pl.rank_genes_groups(adata, n_genes=10, save="_markers.png", show=False)
-        print("Exploratory Wilcoxon only; not a group-level result. Use pvals_adj and pseudobulk + FDR for condition DE.")
+        f"""\
+        # Trajectory/fate after PCA + neighbors + UMAP + Leiden (never on raw counts).
+        from scagent.trajectory import run_trajectory_phase
+        _traj = run_trajectory_phase(adata, mode={mode!r}, workspace=".")
+        print("trajectory_verdict=" + str((_traj or {{}}).get("verdict")))
         """
     )
 
 
-def _pseudobulk_block(needs_pseudobulk: bool, condition_key: str, sample_key: str) -> str:
+def _de_block(marker_method: str, cross_validate: str | bool) -> str:
+    return dedent(
+        f"""\
+        # Exploratory cluster markers (cell-level). Not a between-condition result.
+        from scagent.analysis import rank_genes
+        rank_genes(adata, "leiden", method={marker_method!r}, cross_validate={cross_validate!r})
+        sc.pl.rank_genes_groups(adata, n_genes=10, save="_markers.png", show=False)
+        print("rank_genes uses use_raw=True / .raw when present; pvals_adj/FDR. Exploratory cluster markers only. Use pseudobulk + FDR for condition DE.")
+        """
+    )
+
+
+def _pseudobulk_block(
+    needs_pseudobulk: bool, condition_key: str, sample_key: str, engine: str = "auto", cross_validate: str | bool = "auto"
+) -> str:
     if not needs_pseudobulk:
         return "print('pseudobulk_de skipped (no condition comparison in query)')"
     return dedent(
@@ -224,6 +213,8 @@ def _pseudobulk_block(needs_pseudobulk: bool, condition_key: str, sample_key: st
             sample_key={sample_key},
             condition_key=COND_KEY,
             groupby="cell_type" if "cell_type" in adata.obs else "leiden",
+            engine={engine!r},
+            cross_validate={cross_validate!r},
         )
         pb = adata.uns.get("pseudobulk_de") or {{}}
         print("pseudobulk_de engine=" + str(pb.get("engine")) + " ran=" + str(pb.get("ran")))
@@ -237,6 +228,7 @@ def _integration_metrics_block() -> str:
         mix = None
         ilisi = kbet = pca_r2 = None
         integ_passed = True
+        integ_plots = []
         if adata.obs[__SAMPLE_KEY__].nunique() > 1:
             tab = pd.crosstab(adata.obs["leiden"], adata.obs[__SAMPLE_KEY__], normalize="index")
             mix = float(tab.max(axis=1).mean())
@@ -247,7 +239,9 @@ def _integration_metrics_block() -> str:
             kbet = iq.get("kbet")
             pca_r2 = iq.get("pca_batch_r2")
             integ_passed = bool(iq.get("passed"))
-            print("integration_quality", iq)
+            integ_plots = list(iq.get("plots") or [])
+            print("integration_quality", {k: iq.get(k) for k in ("ilisi", "kbet", "pca_batch_r2", "passed", "engine")})
+            print("integration_plots", integ_plots)
             if not integ_passed:
                 print("SCAGENT_WARN: integration metric below threshold " + str(iq.get("issues")))
         """
@@ -402,6 +396,14 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
     impute_method = str(qc.get("imputation") or "none")
     ambient_method = str(qc.get("ambient") or choose_ambient(str(tissue), qc.get("ambient_requested")))
     remove_doublets = bool(qc.get("remove_doublets"))
+    n_samples = int(meta.get("n_samples") or 1)
+    if meta.get("need_batch_correction"):
+        n_samples = max(n_samples, 2)
+    doublet_req = str(qc.get("doublet_methods") or "auto")
+    resolved = qc.get("doublet_methods_resolved") or resolve_doublet_methods(
+        doublet_req, tissue=str(tissue), n_samples=n_samples
+    )
+    doublet_methods = "both" if len(resolved) > 1 else "scrublet"
     regress_cc = str(qc.get("regress_cell_cycle") or "auto")
     p = analysis_params()
     perf = performance_params()
@@ -466,6 +468,8 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         from scagent.preprocess import select_hvg
         select_hvg(adata, n_top_genes=__N_HVG__, batch_key=__SAMPLE_KEY__)
         adata.raw = adata
+        from scagent.analysis import pca as scagent_pca
+        scagent_pca(adata)
 
         metrics = {
             "n_before": n_before,
@@ -478,6 +482,8 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
             "ambient": __AMBIENT_METHOD__,
             "doublet_rate": doublet_rate,
             "doublet_status": doublet_status,
+            "doublet_agreement": doublet_agreement,
+            "doublet_methods": doublet_engines,
             "remove_doublets": REMOVE_DOUBLETS,
             "seed": SEED,
             "phase": "qc",
@@ -500,7 +506,7 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         .replace("__HB_LINE__", hb_line)
         .replace("__LOCKED_QC__", _locked_qc(qc, qc_vars))
         .replace("__AMBIENT__", _ambient_block(ambient_method))
-        .replace("__SCRUBLET__", _scrublet_block(remove_doublets))
+        .replace("__SCRUBLET__", _doublet_block(remove_doublets, doublet_methods, str(tissue)))
         .replace("__CELL_CYCLE__", _cell_cycle_block(str(species), regress_cc, str(tissue)))
         .replace("__NMADS__", str(nmads))
         .replace("__QC_METHOD__", json.dumps(str(qc.get("method") or "mad")))
@@ -538,10 +544,24 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         ct_model = choose_celltypist_model(str(tissue), meta.get("species"))
     needs_pb = bool(plan.get("needs_pseudobulk"))
     condition_key = str(plan.get("condition_key") or meta.get("condition_key") or "condition")
+    deg_engine = str(plan.get("deg_engine") or (load_config().get("deg") or {}).get("engine") or "auto")
+    marker_method = str(plan.get("marker_method") or (load_config().get("deg") or {}).get("marker_method") or "auto")
+    deg_cv = plan.get("deg_cross_validate")
+    if deg_cv is None:
+        deg_cv = (load_config().get("deg") or {}).get("cross_validate") or "auto"
+    want_traj = "trajectory" in (plan.get("route") or []) or "trajectory" in (
+        (plan.get("intent") or {}).get("intents") or []
+    )
+    traj_mode = "force" if want_traj else "auto"
+    tm = str(((load_config().get("modules") or {}).get("trajectory") or "auto")).lower()
+    if tm in {"off", "none", "skip"}:
+        traj_mode = "off"
+    elif tm in {"force", "on", "always"}:
+        traj_mode = "force"
+    nb_scan = _nb_rep(p, "X_scanorama")
     nb_pca = _nb_pca(p)
     nb_harm = _nb_rep(p, "X_pca_harmony")
     nb_scvi = _nb_rep(p, "X_scVI")
-    nb_scan = _nb_rep(p, "X_scanorama")
     res_list = p.get("leiden_resolutions") or [0.2, 0.4, 0.6, 0.8, 1.0]
     perf = performance_params()
 
@@ -609,6 +629,31 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             except Exception as exc:
                 print("SCAGENT_WARN: Harmony/harmonypy missing (" + str(exc) + ")")
                 {nb_pca}
+            """
+        )
+    elif integrator == "bbknn":
+        integrate = dedent(
+            f"""\
+            integrated = False
+            try:
+                import bbknn  # noqa: F401
+                try:
+                    sc.external.pp.bbknn(adata, batch_key={sample_key})
+                except Exception:
+                    bbknn.bbknn(adata, batch_key={sample_key})
+                integrated = True
+                print("integrator=bbknn")
+            except Exception as exc:
+                print("SCAGENT_WARN: BBKNN unavailable (" + str(exc) + "); fallback Harmony")
+            if not integrated:
+                try:
+                    import harmonypy  # noqa: F401
+                    sc.external.pp.harmony_integrate(adata, key={sample_key})
+                    {nb_harm}
+                    print("integrator=harmony_fallback")
+                except Exception as exc2:
+                    print("SCAGENT_WARN: Harmony unavailable (" + str(exc2) + ")")
+                    {nb_pca}
             """
         )
     else:
@@ -779,34 +824,31 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         for i in range(max_depth):
             col = "cell_type_l" + str(i + 1)
             adata.obs[col] = adata.obs["leiden"].astype(str).map(lambda c, i=i: (cluster_lin.get(c) or ["unknown"])[i] if i < len(cluster_lin.get(c) or []) else (cluster_lin.get(c) or ["unknown"])[-1] if cluster_lin.get(c) else "unknown")
-        # Marker hierarchy is the biological assignment. Auto/LLM labels are hypotheses.
-        adata.obs["cell_type"] = adata.obs["marker_label"]
+        from scagent.annotate import fuse_annotation
+        fuse_annotation(adata, sources=("marker_label", "celltypist_label", "deg_label"))
         if "celltypist_label" in adata.obs:
             auto = adata.obs["celltypist_label"].astype(str)
             mark = adata.obs["marker_label"].astype(str)
-            conflict = (auto != mark) & (mark != "unknown")
-            adata.obs["annotation_conflict"] = conflict
-            unvalidated = (mark == "unknown") & (adata.obs.get("celltypist_conf", 0) >= 0.5)
-            adata.obs.loc[unvalidated, "cell_type"] = auto[unvalidated] + "|unvalidated"
-            n_conf = int(conflict.sum())
+            adata.obs["annotation_conflict"] = (auto != mark) & (mark != "unknown") & (auto != "unassigned")
+            n_conf = int(adata.obs["annotation_conflict"].sum())
             if n_conf:
-                print("SCAGENT_WARN: marker vs auto-annotation conflict in " + str(n_conf) + " cells; markers kept")
+                print("SCAGENT_WARN: marker vs auto conflict in " + str(n_conf) + " cells; fusion status in annotation_status")
             for row in evidence_rows:
                 cl = row["cluster"]
                 sub = adata.obs["leiden"].astype(str) == cl
                 row["auto_label"] = str(adata.obs.loc[sub, "celltypist_label"].mode().iloc[0]) if sub.any() else None
-                row["conflict"] = bool((adata.obs.loc[sub, "annotation_conflict"]).any()) if "annotation_conflict" in adata.obs else False
-        low = adata.obs.get("celltypist_conf", 1) < 0.5
-        unknown_and_low = (adata.obs["marker_label"].astype(str) == "unknown") & low
-        adata.obs.loc[unknown_and_low, "cell_type"] = "low_conf"
+                row["fused"] = str(adata.obs.loc[sub, "cell_type"].mode().iloc[0]) if sub.any() else None
+                row["conflict"] = bool(adata.obs.loc[sub, "annotation_conflict"].any()) if "annotation_conflict" in adata.obs else False
         Path("annotation_evidence.json").write_text(json.dumps(evidence_rows, indent=2), encoding="utf-8")
         __PSEUDOBULK__
-        color_cols = ["cell_type", "marker_label", "cell_type_l1"]
+        color_cols = ["cell_type", "marker_label", "deg_label", "cell_type_l1", "annotation_status"]
         if "celltypist_label" in adata.obs:
             color_cols.append("celltypist_label")
         if "ref2_label" in adata.obs:
             color_cols.append("ref2_label")
         sc.pl.umap(adata, color=color_cols, save="_annotation.png", show=False)
+
+        __TRAJECTORY__
 
         __INTEG_METRICS__
 
@@ -821,10 +863,26 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             "kbet": kbet,
             "pca_batch_r2": pca_r2,
             "integration_passed": integ_passed,
+            "integration_plots": integ_plots,
             "celltypist_model": adata.uns.get("celltypist_model"),
+            "deg_engine": (adata.uns.get("pseudobulk_de") or {{}}).get("engine"),
+            "deg_n_sig": (adata.uns.get("pseudobulk_de") or {{}}).get("n_sig"),
+            "deg_engines": (adata.uns.get("pseudobulk_de") or {{}}).get("engines"),
+            "deg_n_overlap": (adata.uns.get("pseudobulk_de") or {{}}).get("n_overlap"),
+            "deg_jaccard": (adata.uns.get("pseudobulk_de") or {{}}).get("jaccard"),
+            "deg_crossvalidate": (adata.uns.get("pseudobulk_de") or {{}}).get("cross_validate"),
+            "marker_method": (adata.uns.get("scagent_markers") or {{}}).get("method"),
+            "marker_methods": (adata.uns.get("scagent_markers") or {{}}).get("methods"),
+            "marker_n_overlap": (adata.uns.get("scagent_markers") or {{}}).get("n_overlap"),
+            "marker_jaccard": (adata.uns.get("scagent_markers") or {{}}).get("jaccard"),
             "seed": SEED,
             "annotation_dual_validation": True,
             "hierarchical_annotation": True,
+            "annotation_fusion": True,
+            "trajectory_verdict": (adata.uns.get("scagent_trajectory") or {{}}).get("verdict"),
+            "trajectory_methods": (adata.uns.get("scagent_trajectory") or {{}}).get("methods"),
+            "trajectory_score": (adata.uns.get("scagent_trajectory") or {{}}).get("score"),
+            "trajectory_confidence": (adata.uns.get("scagent_trajectory") or {{}}).get("confidence"),
         }
         print("SCAGENT_METRICS:" + json.dumps(metrics))
         Path("downstream_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
@@ -836,10 +894,11 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         tpl.replace("__SAMPLE_KEY__", sample_key)
         .replace("__INTEGRATE__", integrate.strip("\n"))
         .replace("__RES_BLOCK__", res_block.strip("\n"))
-        .replace("__DE_BLOCK__", _de_block(needs_pb, condition_key, sample_key).strip("\n"))
-        .replace("__PSEUDOBULK__", _pseudobulk_block(needs_pb, condition_key, sample_key).strip("\n"))
+        .replace("__DE_BLOCK__", _de_block(marker_method, deg_cv).strip("\n"))
+        .replace("__PSEUDOBULK__", _pseudobulk_block(needs_pb, condition_key, sample_key, deg_engine, deg_cv).strip("\n"))
         .replace("__CELLTYPIST__", _celltypist_block(ct_model).strip("\n"))
         .replace("__SECOND_REF__", _second_ref_block().strip("\n"))
+        .replace("__TRAJECTORY__", _trajectory_block(traj_mode).strip("\n"))
         .replace("__INTEG_METRICS__", _integration_metrics_block().strip("\n"))
         .replace("__MARKERS__", marker_json)
         .replace("__INTEGRATOR__", repr(integrator))
@@ -857,3 +916,42 @@ def scanpy_script(meta: dict, qc: dict, plan: dict | None = None) -> str:
     p1 = qc_preprocess_script(meta, qc)
     p2 = cluster_annotate_script(meta, qc, plan)
     return p1.rstrip() + "\n\n# --- PHASE 2 ---\n\n" + p2
+
+
+def interpret_pathways_script(meta: dict, plan: dict | None = None, interpretation: dict | None = None) -> str:
+    """Biological Interpretation Agent: enrichment in the workspace after DEG/markers exist."""
+    del meta, plan
+    tissue = (interpretation or {}).get("tissue") or "unknown"
+    return dedent(
+        f"""\
+        # scAgent phase 3: Biological Interpretation (GSEA/GSVA or ORA + gene-set report)
+        import json
+        from pathlib import Path
+        from scagent.enrich import enrich_from_workspace
+        from scagent.evidence import write_evidence_chains
+
+        TISSUE = {tissue!r}
+        out = enrich_from_workspace(Path("."))
+        chains = write_evidence_chains(Path("."), tissue=TISSUE)
+        metrics = {{
+            "phase": "interpret",
+            "enrichment_engine": out.get("engine"),
+            "gsva": out.get("gsva"),
+            "n_pathway_terms": out.get("n_terms"),
+            "n_input_genes": out.get("n_input_genes"),
+            "source": out.get("source"),
+            "tissue": TISSUE,
+            "n_claims": chains.get("n_claims"),
+            "n_claims_ok": chains.get("n_ok"),
+            "evidence_all_ok": chains.get("all_ok"),
+        }}
+        print("SCAGENT_METRICS:" + json.dumps(metrics))
+        print("pathway_enrichment", {{k: out.get(k) for k in ("engine", "n_terms", "source")}})
+        print("evidence_chains", {{k: chains.get(k) for k in ("n_claims", "n_ok", "all_ok")}})
+        if not out.get("n_input_genes"):
+            print("SCAGENT_WARN: no DEG/marker gene list; enrichment skipped (not a GSVA result)")
+        if chains.get("n_claims") and not chains.get("all_ok"):
+            print("SCAGENT_WARN: cell-state claims missing marker/pathway/DOI chain; do not report as fact")
+        Path("interpret_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+        """
+    )

@@ -36,6 +36,8 @@ def test_rag_mito_qc_chinese():
 
 def test_hybrid_chinese_batch_hits_harmony():
     assert "harmony" in expand_query("批次效应校正").lower()
+    assert "palantir" in expand_query("轨迹分析").lower()
+    assert "scvelo" in expand_query("rna velocity").lower()
     _refresh()
     hits = retrieve("批次效应校正", collection="papers", top_k=8)
     assert hits

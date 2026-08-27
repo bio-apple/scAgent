@@ -78,11 +78,14 @@ def build_memory(state: dict) -> dict[str, Any]:
         annotation.append("Marker")
     if "ref2_label" in code_dn or ann.get("ref2"):
         annotation.append("ref2")
+    if "fuse_annotation" in code_dn or "annotation_n_agree" in code_dn:
+        annotation.append("fusion")
     if not annotation:
         annotation = ["Marker"]
 
     if plan.get("needs_pseudobulk") or meta.get("needs_pseudobulk"):
-        deg = "pseudobulk+FDR"
+        eng = mets.get("deg_engine") or plan.get("deg_engine") or "auto"
+        deg = f"pseudobulk+{eng}"
     elif "rank_genes_groups" in code_dn.lower() or "wilcox" in code_dn.lower():
         deg = "wilcox (exploratory)"
     else:
@@ -91,6 +94,7 @@ def build_memory(state: dict) -> dict[str, Any]:
     steps = {
         "qc": _step(state.get("code_qc"), exe_qc, _first_snapshot(exe_qc, h5ads.get("qc"))),
         "downstream": _step(state.get("code_downstream"), exe_dn, _first_snapshot(exe_dn, h5ads.get("processed"))),
+        "interpret": _step(state.get("code_interpret"), state.get("execution_interpret"), None),
     }
     tid = state.get("thread_id")
     return {
@@ -106,18 +110,25 @@ def build_memory(state: dict) -> dict[str, Any]:
             "n_after": mets.get("n_after"),
             "pct_removed": mets.get("pct_removed"),
             "doublets": bool(qc.get("doublets", True)),
+            "doublet_methods": qc.get("doublet_methods_resolved") or qc.get("doublet_methods"),
             "ambient": qc.get("ambient") or "none",
         },
         "normalize": normalize,
         "integration": plan.get("integrator"),
         "annotation": annotation,
         "deg": deg,
+        "route": plan.get("route"),
+        "loop": plan.get("loop") or "plan-and-solve",
+        "collaboration": plan.get("collaboration") or "multi-agent",
+        "agents": [a.get("id") for a in (plan.get("agents") or []) if a.get("id")],
         "params": {
             "n_pcs": params["n_pcs"],
             "n_hvg": params["n_hvg"],
             "hvg_flavor": params.get("hvg_flavor"),
             "n_neighbors": params["n_neighbors"],
             "seed": params["seed"],
+            "hitl_mt": state.get("qc_choice"),
+            "hitl_resolution": state.get("resolution_choice") or state.get("resolution"),
         },
         "steps": steps,
         "resume_from": _resume_from(steps),
@@ -126,6 +137,11 @@ def build_memory(state: dict) -> dict[str, Any]:
             if tid
             else "python -m scagent run --from-checkpoint"
         ),
+        "snapshots": [
+            {"step": e.get("step"), "kind": e.get("kind"), "path": e.get("path")}
+            for e in list((exe_qc.get("snapshot_manifests") or []))
+            + list((exe_dn.get("snapshot_manifests") or []))
+        ],
     }
 
 

@@ -239,6 +239,7 @@ Is the tissue and cell type composition well-characterized?
 
 ## Related Skills
 
+- `single-cell-annotation` — SciAgent legacy skill (sc-best-practices annotation chapter): marker vs automated vs reference-transfer decision tree, pitfalls, marker panels
 - `scanpy-scrna-seq` — Full scRNA-seq analysis pipeline in Scanpy covering QC, normalization, clustering, and basic marker-based annotation; use as the computational foundation before applying this guide's annotation strategy
 - `celltypist-cell-annotation` — Tier 2 automated annotation tool using pre-trained logistic regression models for 100+ cell types across blood, lung, gut, brain, and other tissues
 - `popv-cell-annotation` — Tier 3 ensemble label transfer tool using 10+ methods with majority voting; use for robust annotation of novel or heterogeneous datasets

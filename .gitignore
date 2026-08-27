@@ -1,4 +1,5 @@
 .env
+config.local.yaml
 .venv/
 venv/
 __pycache__/
@@ -16,6 +17,9 @@ outputs/*
 !outputs/.gitkeep
 knowledge/.index/
 .cache/
+best_practices/upstream/
+knowledge/sops/**
+!knowledge/sops/README.md
 *.h5ad
 !tests/data/*.h5ad
 !tests/data/**/*.h5ad

@@ -16,6 +16,8 @@ def test_existing_skills_preserved():
         "scanpy-scrna-seq",
         "scvi-tools-single-cell",
         "single-cell-annotation-guide",
+        "single-cell-annotation",
+        "cellchat-cell-communication",
     }
     assert expected <= names
 
@@ -25,6 +27,13 @@ def test_recommend_harmony_for_multi_sample():
     assert "scanpy-scrna-seq" in skills
     assert "harmony-batch-correction" in skills
     assert "celltypist-cell-annotation" in skills
+    assert "single-cell-annotation" in skills
+
+
+def test_recommend_cellchat_for_communication_query():
+    skills = recommend_skills({"tissue": "tumor", "task": "CellChat 分析肿瘤与 T 细胞的配体受体通讯"})
+    assert "cellchat-cell-communication" in skills
+    assert "scanpy-scrna-seq" in skills
 
 
 def test_choose_integrator():
@@ -63,7 +72,8 @@ def test_qc_template_passes_reviewer():
     assert LOCKED_START in code
     assert "log1p=True" in code
     assert 'side="high"' in code
-    assert "scrublet" in code
+    assert "detect_doublets" in code
+    assert "scrublet" in code.lower()
     assert "predicted_doublet" in code
     assert "select_hvg" in code
     assert "filter_genes" in code
@@ -79,6 +89,7 @@ def test_downstream_template_dual_validation():
     compile(code, "<down>", "exec")
     assert "celltypist" in code.lower()
     assert "ref2_label" in code
+    assert "fuse_annotation" in code
     assert "positive" in code and "negative" in code
     assert "harmonypy" in code
     assert "use_raw" in code
@@ -86,6 +97,7 @@ def test_downstream_template_dual_validation():
     r = audit_code(code, meta, phase="downstream")
     assert r["has_celltypist"] and r["has_dual"]
     assert r.get("has_ref2") is True
+    assert r.get("has_fusion") is True
     assert r["passed"] is True
 
 
@@ -226,6 +238,7 @@ def test_publication_review_card_and_score():
     assert by_key["deg"]["status"] == "pass"
     assert by_key["figures"]["status"] == "missing"
     assert by_key["annotation"]["status"] == "pass"
+    assert by_key["evidence"]["status"] == "missing"
     assert 80 <= card["score"] <= 95
     text = format_review_card(card, "zh")
     assert "✅ **QC:** PASS" in text

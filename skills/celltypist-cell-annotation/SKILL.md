@@ -375,6 +375,7 @@ if "sample" in adata.obs.columns:
 
 ## Related Skills
 
+- **single-cell-annotation** — SciAgent legacy best-practices skill: marker vs automated vs reference-transfer decision tree
 - **scanpy-scrna-seq** — preprocessing pipeline (QC, normalization, clustering) that produces the AnnData input for CellTypist
 - **popv-cell-annotation** — ensemble annotation using 10+ methods; use when you want consensus across methods rather than a single model
 - **scvi-tools-single-cell** — scANVI for semi-supervised label transfer with deep generative models and probabilistic uncertainty

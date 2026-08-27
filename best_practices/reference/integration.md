@@ -5,6 +5,7 @@
 ## When to Integrate
 
 - Only for **multi-sample or multi-batch** experiments.
+- scAgent inspect: if `obs` has `sample`/`batch`/`donor`/`orig.ident`/`library_id` with >1 level, or `--data` lists multiple paths / Cell Ranger samples, set `need_batch_correction` and auto-trigger integration (Harmony default; scVI if ≥100k cells or ≥8 samples). Skip when sample and condition are 1:1 collinear.
 - First check: after merging samples and computing UMAP, do cells cluster by sample/batch instead of cell type? If yes, integration is needed.
 - **Caution**: "If your biological condition of interest perfectly correlates with batch... distinguishing true biological effects from technical batch effects becomes inherently more challenging" (10x Genomics).
 

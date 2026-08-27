@@ -104,7 +104,10 @@ def test_cli_from_checkpoint_alias():
     assert p.parse_args(["run", "q", "--from-checkpoint"]).resume is True
     assert p.parse_args(["run", "q", "--resume"]).resume is True
     assert p.parse_args(["run", "q"]).resume is False
-    assert p.parse_args(["memory"]).func.__name__ == "cmd_memory"
+    assert p.parse_args(["run", "q", "--force-resume"]).force_resume is True
+    assert p.parse_args(["run", "q"]).force_resume is False
+    assert p.parse_args(["run", "q", "--integrator", "bbknn"]).integrator == "bbknn"
+    assert p.parse_args(["run", "q", "--integrator", "scanorama"]).integrator == "scanorama"
 
 
 def test_writer_html_and_run_log(tmp_path):
@@ -128,3 +131,8 @@ def test_writer_html_and_run_log(tmp_path):
     log = json.loads((tmp_path / "run_log.json").read_text(encoding="utf-8"))
     assert log["thread_id"] == "t1"
     assert "issue_records" in log["review_qc"]
+    assert "versions" in log
+    from scagent.export_nb import export_analysis_notebook
+
+    nb = export_analysis_notebook({**state, "code_qc": "print('qc')"}, tmp_path)
+    assert nb.is_file()

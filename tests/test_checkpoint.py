@@ -1,7 +1,8 @@
 from langgraph.checkpoint.memory import MemorySaver
 
+from agents.code_audit import _code_fp, _reuse as _reuse_execution
 from workflows.checkpointing import SqlitePickleSaver
-from workflows.scRNA_langgraph import _reuse_execution, build_graph, run_analysis
+from workflows.scRNA_langgraph import build_graph, run_analysis
 
 
 def test_graph_compiles_with_memory_checkpointer():
@@ -58,7 +59,7 @@ def test_sqlite_pickle_graph_invoke(tmp_path):
 def test_reuse_execution_requires_same_code():
     prev = {"ok": True, "executed": True, "code_fp": "deadbeef"}
     assert _reuse_execution(prev, "print(1)", False) is None
-    from workflows.scRNA_langgraph import _code_fp
+    from agents.code_audit import _code_fp
 
     prev["code_fp"] = _code_fp("print(1)")
     assert _reuse_execution(prev, "print(1)", True) is prev

@@ -11,3 +11,12 @@ harmonypy>=0.0.10
 leidenalg>=0.10
 igraph>=0.11
 celltypist>=1.6
+nbformat>=5.10
+nbclient>=0.10
+ipykernel>=6.29
+# Optional fate tools (not required; scAgent skips if missing):
+# palantir>=1.3
+# scvelo>=0.3
+# Optional IO / graph integration:
+# loompy>=3.0
+# bbknn>=1.6

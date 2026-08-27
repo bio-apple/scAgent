@@ -35,7 +35,13 @@ analysis = [
   "scikit-learn>=1.4",
   "scipy>=1.11",
   "joblib>=1.3",
+  "nbformat>=5.10",
+  "nbclient>=0.10",
+  "ipykernel>=6.29",
 ]
+loom = ["loompy>=3.0"]
+bbknn = ["bbknn>=1.6"]
+trajectory = ["palantir>=1.3", "scvelo>=0.3"]
 dev = ["pytest>=8.0", "flake8>=7.0", "black>=24.0"]
 
 [project.scripts]

@@ -66,10 +66,10 @@ def load_h5ad(name: str, cfg: dict | None = None):
     path = cache_dir(cfg) / f"{name}.h5ad"
     if not path.exists():
         return None
-    import anndata as ad
+    from scagent.io import read_h5ad
 
-    log.info("cache hit %s", path)
-    return ad.read_h5ad(path)
+    log.info("cache hit %s (lazy/backed)", path)
+    return read_h5ad(path)
 
 
 def llm_key(messages) -> str:

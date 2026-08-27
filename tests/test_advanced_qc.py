@@ -23,6 +23,7 @@ def test_qc_writes_predicted_doublet_and_cell_cycle():
         {"nmads": 5, "remove_doublets": True, "regress_cell_cycle": "auto"},
     )
     compile(code, "<qc_adv>", "exec")
+    assert "detect_doublets" in code
     assert "predicted_doublet" in code
     assert "REMOVE_DOUBLETS = True" in code
     assert "cell_cycle_score" in code
@@ -61,6 +62,7 @@ def test_condition_de_requires_pseudobulk_impl():
     code = cluster_annotate_script(meta, {}, {"integrator": "harmony", "needs_pseudobulk": True, "condition_key": "condition"})
     compile(code, "<pb>", "exec")
     assert "pseudobulk_de" in code
+    assert "engine=" in code
     r = audit_code(code, meta, phase="downstream")
     assert r["has_pseudobulk_impl"] is True
     assert r["passed"] is True
@@ -102,3 +104,5 @@ def test_integration_metrics_helpers():
     )
     assert "integration_quality" in down
     assert "ilisi" in down
+    assert "integration_plots" in down
+    assert "integ_plots" in down

@@ -1,12 +1,14 @@
-"""IO for AnnData (.h5ad / 10x) and Seurat (.rds / .h5seurat)."""
+"""IO for AnnData (.h5ad / .loom / 10x / Cell Ranger outs) and Seurat (.rds / .h5seurat)."""
 
 from __future__ import annotations
 
+import gzip
 import shutil
 import subprocess
 import tempfile
+from glob import glob
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from scagent.config import performance_params
 from scagent.logutil import get_logger
@@ -14,6 +16,11 @@ from scagent.logutil import get_logger
 log = get_logger("io")
 
 R_IO = Path(__file__).resolve().parent / "r" / "io.R"
+
+_MATRIX_NAMES = ("matrix.mtx.gz", "matrix.mtx")
+_CR_H5_NAMES = ("filtered_feature_bc_matrix.h5", "raw_feature_bc_matrix.h5")
+_MATRIX_DIR_NAMES = ("filtered_feature_bc_matrix", "raw_feature_bc_matrix")
+_FILE_SUFFIXES = {".h5ad", ".loom", ".h5", ".rds", ".h5seurat"}
 
 
 def peek_h5ad_shape(path: str | Path) -> tuple[int | None, int | None]:
@@ -60,21 +67,305 @@ def ensure_csr(adata):
     return adata
 
 
-def read_single_cell(path: str | Path, **kwargs: Any):
-    """Dispatch reader by suffix/directory. Returns AnnData."""
+def parse_data_spec(raw: str | Path | Iterable[str | Path] | None) -> list[Path]:
+    """Split comma-separated paths and expand globs. Order is preserved."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        items = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        s = str(raw).strip()
+        if not s:
+            return []
+        items = [p.strip() for p in s.split(",") if p.strip()]
+    out: list[Path] = []
+    for item in items:
+        if any(ch in item for ch in "*?["):
+            matches = sorted(glob(item, recursive=True))
+            if matches:
+                out.extend(Path(m).expanduser() for m in matches)
+            else:
+                out.append(Path(item).expanduser())
+        else:
+            out.append(Path(item).expanduser())
+    seen: set[str] = set()
+    uniq: list[Path] = []
+    for p in out:
+        key = str(p.resolve()) if p.exists() else str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(p)
+    return uniq
+
+
+def _has_10x_mtx(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    return any((path / n).exists() for n in _MATRIX_NAMES)
+
+
+def resolve_10x_matrix_dir(path: str | Path) -> Path | None:
+    """Cell Ranger outs/ or a 10x mtx folder. Prefers filtered_feature_bc_matrix."""
+    path = Path(path)
+    if path.is_file():
+        return None
+    candidates = [
+        path,
+        path / "filtered_feature_bc_matrix",
+        path / "raw_feature_bc_matrix",
+        path / "outs" / "filtered_feature_bc_matrix",
+        path / "outs" / "raw_feature_bc_matrix",
+        path / "outs",
+    ]
+    for c in candidates:
+        if _has_10x_mtx(c):
+            return c
+    return None
+
+
+def resolve_10x_h5(path: str | Path) -> Path | None:
+    """Cell Ranger filtered_feature_bc_matrix.h5 under the given path or outs/."""
+    path = Path(path)
+    if path.is_file() and path.suffix.lower() == ".h5":
+        return path
+    if not path.is_dir():
+        return None
+    for folder in (path, path / "outs"):
+        for name in _CR_H5_NAMES:
+            hit = folder / name
+            if hit.is_file():
+                return hit
+    return None
+
+
+def sample_label(path: str | Path) -> str:
+    """Folder name of a Cell Ranger sample, else file stem."""
     p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(p)
-    suf = p.suffix.lower()
-    if p.is_dir() or (p / "matrix.mtx").exists() or (p / "matrix.mtx.gz").exists():
-        return read_10x(p, **kwargs)
+    name = p.name
+    if name in _MATRIX_DIR_NAMES:
+        parent = p.parent
+        if parent.name == "outs":
+            return parent.parent.name or p.stem
+        return parent.name or p.stem
+    if name == "outs":
+        return p.parent.name or p.stem
+    if name in _CR_H5_NAMES:
+        parent = p.parent
+        if parent.name == "outs":
+            return parent.parent.name or p.stem
+        return parent.name or p.stem
+    if p.is_file():
+        return p.stem
+    return name or p.stem
+
+
+def discover_samples(path: str | Path) -> list[Path]:
+    """One 10x/Cell Ranger sample, or children that each look like a sample."""
+    path = Path(path)
+    if not path.exists():
+        return [path]
+    if path.is_file():
+        return [path]
+    mtx = resolve_10x_matrix_dir(path)
+    if mtx is not None:
+        return [mtx]
+    h5 = resolve_10x_h5(path)
+    if h5 is not None:
+        return [h5]
+    kids: list[Path] = []
+    try:
+        children = sorted(path.iterdir())
+    except OSError:
+        return [path]
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        if child.is_file() and child.suffix.lower() in _FILE_SUFFIXES:
+            kids.append(child)
+            continue
+        if not child.is_dir():
+            continue
+        mtx = resolve_10x_matrix_dir(child)
+        if mtx is not None:
+            kids.append(mtx)
+            continue
+        h5 = resolve_10x_h5(child)
+        if h5 is not None:
+            kids.append(h5)
+    return kids
+
+
+def count_tsv_rows(directory: str | Path, names: tuple[str, ...]) -> int | None:
+    directory = Path(directory)
+    for name in names:
+        f = directory / name
+        if not f.is_file():
+            continue
+        try:
+            if name.endswith(".gz"):
+                with gzip.open(f, "rt") as fh:
+                    return sum(1 for line in fh if line.strip())
+            with f.open(encoding="utf-8", errors="replace") as fh:
+                return sum(1 for line in fh if line.strip())
+        except OSError:
+            return None
+    return None
+
+
+def peek_10x_h5_shape(path: str | Path) -> tuple[int | None, int | None]:
+    """n_cells, n_genes from Cell Ranger HDF5."""
+    path = Path(path)
+    try:
+        import h5py
+    except ImportError:
+        return None, None
+    try:
+        with h5py.File(path, "r") as f:
+            matrix = f.get("matrix")
+            if matrix is None:
+                return None, None
+            if "shape" in matrix:
+                sh = matrix["shape"][()]
+                n_genes, n_cells = int(sh[0]), int(sh[1])
+                return n_cells, n_genes
+            if "barcodes" in matrix:
+                n_cells = int(len(matrix["barcodes"]))
+                n_genes = int(len(matrix["features"]["id"])) if "features" in matrix else None
+                return n_cells, n_genes
+    except Exception as exc:
+        log.debug("peek_10x_h5_shape failed: %s", exc)
+    return None, None
+
+
+def peek_loom(path: str | Path) -> dict[str, Any]:
+    """Cell/gene counts and col_attrs keys without loading the sparse matrix."""
+    path = Path(path)
+    out: dict[str, Any] = {"n_cells": None, "n_genes": None, "obs_columns": [], "obs_nunique": {}}
+    try:
+        import h5py
+    except ImportError:
+        return out
+    try:
+        with h5py.File(path, "r") as f:
+            matrix = f.get("matrix")
+            if matrix is not None and getattr(matrix, "shape", None) is not None and len(matrix.shape) == 2:
+                out["n_genes"] = int(matrix.shape[0])
+                out["n_cells"] = int(matrix.shape[1])
+            cols = f.get("col_attrs")
+            if cols is not None:
+                names = [str(k) for k in cols.keys()]
+                out["obs_columns"] = names
+                nunique: dict[str, int] = {}
+                for key in names:
+                    try:
+                        vals = cols[key][()]
+                        nunique[key] = len({str(v) for v in (vals.tolist() if hasattr(vals, "tolist") else vals)})
+                    except Exception:
+                        continue
+                out["obs_nunique"] = nunique
+            rows = f.get("row_attrs")
+            genes: list[str] = []
+            if rows is not None:
+                for gkey in ("Gene", "gene_symbols", "var_names", "Accession"):
+                    if gkey in rows:
+                        raw = rows[gkey][:8000]
+                        genes = [x.decode("utf-8", "replace") if isinstance(x, (bytes, bytearray)) else str(x) for x in raw]
+                        break
+            out["genes"] = genes
+    except Exception as exc:
+        log.debug("peek_loom failed: %s", exc)
+    return out
+
+
+def read_single_cell(path: str | Path | Iterable[str | Path], **kwargs: Any):
+    """Dispatch by suffix/directory. Comma-separated or a sample folder concatenates with obs[sample]."""
+    sample_key = str(kwargs.pop("sample_key", None) or "sample")
+    specs = parse_data_spec(path)
+    if not specs:
+        raise FileNotFoundError("empty data path")
+    expanded: list[Path] = []
+    for spec in specs:
+        if not spec.exists():
+            raise FileNotFoundError(spec)
+        found = discover_samples(spec)
+        if spec.is_dir() and not found:
+            raise ValueError(
+                f"unsupported directory (not 10x mtx, Cell Ranger outs/, h5ad, or loom): {spec}"
+            )
+        expanded.extend(found)
+    seen: set[str] = set()
+    uniq: list[Path] = []
+    for p in expanded:
+        key = str(p.resolve()) if p.exists() else str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(p)
+    if not uniq:
+        raise ValueError(f"unsupported single-cell format: {path}")
+    if len(uniq) == 1:
+        return _read_one(uniq[0], **kwargs)
+    log.info("concat %s samples sample_key=%s", len(uniq), sample_key)
+    return concat_samples(uniq, sample_key=sample_key, **kwargs)
+
+
+def _read_one(path: Path, **kwargs: Any):
+    suf = path.suffix.lower()
+    if path.is_dir() or _has_10x_mtx(path):
+        mtx = resolve_10x_matrix_dir(path)
+        if mtx is not None:
+            vn = kwargs.get("var_names", "gene_symbols")
+            return read_10x(mtx, var_names=str(vn))
+        h5 = resolve_10x_h5(path)
+        if h5 is not None:
+            return read_10x_h5(h5)
+        raise ValueError(f"unsupported directory: {path}")
     if suf == ".h5ad":
-        return read_h5ad(p, **kwargs)
-    if suf in {".h5"}:
-        return read_10x_h5(p, **kwargs)
+        return read_h5ad(path, **{k: v for k, v in kwargs.items() if k in {"backed"}})
+    if suf == ".loom":
+        return read_loom(path)
+    if suf == ".h5":
+        return read_10x_h5(path)
     if suf in {".rds", ".h5seurat"}:
-        return read_seurat_rds(p, **kwargs)
-    raise ValueError(f"unsupported single-cell format: {p}")
+        return read_seurat_rds(path, **{k: v for k, v in kwargs.items() if k in {"tmp_dir"}})
+    raise ValueError(f"unsupported single-cell format: {path}")
+
+
+def concat_samples(paths: list[Path], *, sample_key: str = "sample", **kwargs: Any):
+    import anndata as ad
+    import numpy as np
+
+    ads = []
+    for p in paths:
+        a = _read_one(Path(p), **kwargs)
+        label = sample_label(p)
+        a.obs[sample_key] = str(label)
+        a.obs_names = [f"{label}_{n}" for n in map(str, a.obs_names)]
+        ads.append(a)
+    try:
+        out = ad.concat(ads, join="inner", index_unique=None)
+    except Exception as exc:
+        log.debug("concat inner failed (%s); trying outer", exc)
+        out = ad.concat(ads, join="outer", index_unique=None)
+    if int(getattr(out, "n_vars", 0) or 0) == 0:
+        out = ad.concat(ads, join="outer", index_unique=None)
+    try:
+        from scipy import sparse
+
+        X = out.X
+        if X is not None and not sparse.issparse(X):
+            out.X = np.nan_to_num(np.asarray(X), nan=0.0)
+        elif X is not None:
+            X = X.tocsr()
+            if getattr(X, "data", None) is not None and np.isnan(X.data).any():
+                X.data = np.nan_to_num(X.data, nan=0.0)
+            out.X = X
+    except Exception:
+        pass
+    out.obs_names_make_unique()
+    out.uns["scagent_concat"] = {"n_samples": len(paths), "sample_key": sample_key, "paths": [str(p) for p in paths]}
+    return ensure_csr(out)
 
 
 def read_h5ad(path: str | Path, *, backed: str | None | bool = None):
@@ -102,11 +393,50 @@ def read_h5ad(path: str | Path, *, backed: str | None | bool = None):
     return adata
 
 
+def read_loom(path: str | Path):
+    """Read .loom via anndata/scanpy. Requires loompy."""
+    path = Path(path)
+    log.info("read loom %s", path)
+    try:
+        try:
+            from anndata.io import read_loom as _read_loom
+        except ImportError:
+            import anndata as ad
+
+            _read_loom = ad.read_loom
+        try:
+            adata = _read_loom(path, sparse=True, cleanup=True)
+        except TypeError:
+            adata = _read_loom(path)
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Cannot read {path}: install loompy (pip install loompy) for .loom support."
+        ) from exc
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "loompy" in msg:
+            raise RuntimeError(
+                f"Cannot read {path}: install loompy (pip install loompy) for .loom support. ({exc})"
+            ) from exc
+        try:
+            import scanpy as sc
+
+            adata = sc.read_loom(path)
+        except Exception as exc2:
+            raise RuntimeError(
+                f"Cannot read {path}: {exc2}. .loom needs loompy (`pip install loompy`)."
+            ) from exc2
+    adata.var_names_make_unique()
+    return ensure_csr(adata)
+
+
 def read_10x(path: str | Path, *, var_names: str = "gene_symbols"):
     import scanpy as sc
 
-    log.info("read 10x mtx %s", path)
-    adata = sc.read_10x_mtx(path, var_names=var_names, cache=True)
+    path = Path(path)
+    resolved = resolve_10x_matrix_dir(path) or path
+    log.info("read 10x mtx %s", resolved)
+    adata = sc.read_10x_mtx(resolved, var_names=var_names, cache=True)
     adata.var_names_make_unique()
     return ensure_csr(adata)
 

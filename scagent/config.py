@@ -25,12 +25,30 @@ def load_config(path: Path | None = None, *, reload: bool = False) -> dict[str, 
     cfg_path = Path(cfg_path)
     with cfg_path.open(encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
+    local = cfg_path.with_name("config.local.yaml")
+    if local.is_file() and local.resolve() != cfg_path.resolve():
+        overlay = yaml.safe_load(local.read_text(encoding="utf-8")) or {}
+        if isinstance(overlay, dict):
+            cfg = _deep_merge(cfg, overlay)
+            cfg["_local_config"] = str(local)
     cfg["_root"] = str(REPO_ROOT)
     cfg["_config_path"] = str(cfg_path)
     log_cfg = cfg.get("logging") or {}
     setup_logging(level=log_cfg.get("level"), log_file=_abs(cfg, log_cfg.get("file")))
     _CACHE = cfg
     return cfg
+
+
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for key, val in overlay.items():
+        if str(key).startswith("_"):
+            continue
+        if isinstance(val, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], val)
+        else:
+            out[key] = val
+    return out
 
 
 def cfg_get(cfg: dict[str, Any] | None, dotted: str, default: Any = None) -> Any:

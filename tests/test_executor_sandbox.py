@@ -8,7 +8,12 @@ from scagent.config import load_config
 
 def _cfg(isolation: str = "rlimit"):
     base = load_config()
-    return {**base, "sandbox": {**sandbox_settings(base), "isolation": isolation, "enabled": True}}
+    analysis = {**(base.get("analysis") or {}), "executor": "subprocess"}
+    return {
+        **base,
+        "analysis": analysis,
+        "sandbox": {**sandbox_settings(base), "isolation": isolation, "enabled": True},
+    }
 
 
 def test_policy_blocks_os_system_token():
@@ -76,5 +81,6 @@ def test_seatbelt_blocks_write_outside_workspace(tmp_path):
 def test_resolve_network_auto_by_phase():
     s = {"network": "auto"}
     assert resolve_network(s, phase="qc") is False
+    assert resolve_network(s, phase="interpret") is False
     assert resolve_network(s, phase="downstream") is True
     assert resolve_network({"network": False}, phase="downstream") is False

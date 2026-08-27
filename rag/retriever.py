@@ -41,13 +41,12 @@ def load_chunks(cfg: dict | None = None, collection: str | None = None) -> list[
 
 
 @lru_cache(maxsize=8)
-def _bm25_bundle(collection: str | None, index_mtime: float) -> tuple[BM25Okapi, tuple[dict, ...]]:
+def _bm25_bundle(collection: str | None, index_mtime: float) -> tuple[BM25Okapi | None, tuple[dict, ...]]:
     del index_mtime
     chunks = tuple(load_chunks(collection=collection))
     corpus = [tokenize(c["text"]) for c in chunks]
-    if not corpus:
-        corpus = [[]]
-        chunks = tuple()
+    if not chunks or not any(corpus):
+        return None, tuple()
     return BM25Okapi(corpus), chunks
 
 
@@ -114,7 +113,7 @@ def retrieve(
     cfg = cfg or load_config()
     rag = cfg.get("rag") or {}
     top_k = top_k or int(rag.get("top_k") or 6)
-    weights = {"papers": 1.0, "methods": 0.85, "markers": 1.25, "best_practices": 1.15}
+    weights = {"papers": 1.0, "methods": 0.85, "markers": 1.25, "best_practices": 1.15, "sops": 1.3}
     if collections:
         merged: list[dict] = []
         for col in collections:
@@ -168,7 +167,7 @@ def retrieve(
 
 def format_hits(hits: list[dict]) -> str:
     if not hits:
-        return "（知识库未检索到相关段落。可将 PDF/Markdown 放入 knowledge/papers 后运行 scagent ingest。）"
+        return "（知识库未检索到相关段落。scagent update-kb 拉取 sc-best-practices；scagent add-doc <path> 加入实验室 SOP；或把 PDF/Markdown 放入 knowledge/papers 后 scagent ingest。）"
     parts = []
     for i, h in enumerate(hits, 1):
         parts.append(f"[{i}] {h['source']} (score={h['score']:.3f})\n{h['text'].strip()}")

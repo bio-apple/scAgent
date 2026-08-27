@@ -130,13 +130,39 @@ def _read_pdf(path: Path) -> str:
     return "\n".join(pages)
 
 
+def _read_ipynb(path: Path) -> str:
+    data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    parts: list[str] = []
+    for cell in data.get("cells") or []:
+        src = cell.get("source")
+        if isinstance(src, list):
+            src = "".join(src)
+        text = str(src or "").strip()
+        if not text:
+            continue
+        kind = cell.get("cell_type")
+        if kind == "markdown":
+            parts.append(text)
+        elif kind == "code":
+            parts.append("```\n" + text + "\n```")
+    return "\n\n".join(parts)
+
+
 def _iter_source_files(collection_dir: Path) -> Iterable[Path]:
     if not collection_dir.exists():
         return []
     files: list[Path] = []
-    for ext in ("*.md", "*.txt", "*.pdf"):
+    for ext in ("*.md", "*.txt", "*.pdf", "*.ipynb"):
         files.extend(collection_dir.rglob(ext))
-    return [p for p in files if p.is_file() and p.name != ".DS_Store"]
+    skip_dirs = {"_build", "figures", "datasets", ".git", "__pycache__", ".ipynb_checkpoints"}
+    out: list[Path] = []
+    for p in files:
+        if not p.is_file() or p.name in {".DS_Store", "README.md"}:
+            continue
+        if any(part in skip_dirs for part in p.parts):
+            continue
+        out.append(p)
+    return out
 
 
 def _index_fresh(cfg: dict, out: Path) -> bool:
@@ -183,6 +209,8 @@ def ingest(cfg: dict | None = None, *, force: bool = False) -> Path:
                 continue
             if path.suffix.lower() == ".pdf":
                 text = _read_pdf(path)
+            elif path.suffix.lower() == ".ipynb":
+                text = _read_ipynb(path)
             else:
                 text = path.read_text(encoding="utf-8", errors="replace")
             try:

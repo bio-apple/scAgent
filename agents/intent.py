@@ -8,8 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-IntentName = Literal["qc", "clustering", "deg", "trajectory", "annotation"]
-INTENT_NAMES: tuple[IntentName, ...] = ("qc", "clustering", "deg", "trajectory", "annotation")
+IntentName = Literal["qc", "clustering", "deg", "trajectory", "annotation", "enrichment"]
+INTENT_NAMES: tuple[IntentName, ...] = ("qc", "clustering", "deg", "trajectory", "annotation", "enrichment")
 
 
 class AnalysisIntent(BaseModel):
@@ -33,10 +33,26 @@ _DEG_POS = (
     r"\bdge\b",
 )
 _DEG_NEG = (r"degrad", r"degree", r"\bedge\s+detect")
-_TRAJ = (r"轨迹", r"\bpaga\b", r"pseudotime", r"\btrajectory\b", r"diffusion\s+map")
+_TRAJ = (
+    r"轨迹",
+    r"伪时间",
+    r"命运",
+    r"分化轴",
+    r"\bpaga\b",
+    r"pseudotime",
+    r"\btrajectory\b",
+    r"diffusion\s+map",
+    r"\bdpt\b",
+    r"monocle",
+    r"palantir",
+    r"scvelo",
+    r"\bvelocity\b",
+    r"rna\s+velocity",
+)
 _ANN = (r"注释", r"cell\s*type", r"celltypist", r"annotat")
 _CLUST = (r"聚类", r"\bleiden\b", r"\blouvain\b", r"cluster")
 _QC = (r"质控", r"\bqc\b", r"doublet", r"mito", r"线粒体", r"scrublet")
+_ENR = (r"通路", r"富集", r"\bgsea\b", r"\bgsva\b", r"enrichment", r"hallmark")
 
 
 def _search(query: str, patterns: tuple[str, ...]) -> bool:
@@ -57,8 +73,12 @@ def rule_intent(query: str | None) -> dict[str, Any]:
         intents.append("deg")
     if _search(q, _TRAJ):
         intents.append("trajectory")
+    if _search(q, _ENR):
+        intents.append("enrichment")
     if not intents:
         intents = ["qc", "clustering", "annotation"]
+    if any(x in intents for x in ("clustering", "annotation", "deg")) and "enrichment" not in intents:
+        intents.append("enrichment")
     return {
         "intents": intents,
         "condition_comparison": bool(deg),
@@ -96,7 +116,7 @@ def _llm_intent(query: str | None, cfg: dict | None) -> dict[str, Any] | None:
     system = (
         read_prompt("planner")
         + "\n\nReturn ONLY a JSON object with keys:\n"
-        '{"intents": ["qc"|"clustering"|"deg"|"trajectory"|"annotation", ...], '
+        '{"intents": ["qc"|"clustering"|"deg"|"trajectory"|"annotation"|"enrichment", ...], '
         '"condition_comparison": boolean}\n'
         "Do not set deg for RNA degradation, degree, or edge detection. "
         "Standard annotation/QC tasks should not include deg unless a condition contrast is requested."

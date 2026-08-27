@@ -1,10 +1,10 @@
-"""Explicit DAG of analysis steps. DEG requires a groupby/annotation column, not a hard-coded list."""
+"""Single-cell Plan-and-Solve DAG. Downstream tools cannot run before their prerequisites."""
 
 from __future__ import annotations
 
 from collections import defaultdict, deque
 
-# node -> prerequisites
+# node -> prerequisites (must finish first)
 DEPS: dict[str, tuple[str, ...]] = {
     "qc": (),
     "normalize": ("qc",),
@@ -17,33 +17,50 @@ DEPS: dict[str, tuple[str, ...]] = {
     "harmony": ("pca",),
     "scvi": ("pca",),
     "cca": ("pca",),
+    "bbknn": ("pca",),
     "neighbors": ("pca",),
     "leiden": ("neighbors",),
     "umap": ("neighbors",),
-    "annotate": ("leiden",),
-    "pseudobulk_deg": ("annotate",),  # needs cell_type / leiden groupby
-    "trajectory": ("neighbors",),
+    "annotate": ("leiden", "umap"),
+    "cluster_deg": ("leiden", "umap"),
+    "pseudobulk_deg": ("annotate",),
+    # DPT / PAGA / Monocle3: after DR + clustering, never on raw counts
+    "trajectory": ("umap", "leiden"),
+    "gsea": ("leiden", "umap"),
 }
 
 INTENT_GOALS: dict[str, tuple[str, ...]] = {
     "qc": ("qc",),
     "clustering": ("leiden", "umap"),
     "annotation": ("annotate",),
-    "deg": ("pseudobulk_deg",),
+    "deg": ("cluster_deg", "pseudobulk_deg"),
     "trajectory": ("trajectory",),
+    "enrichment": ("gsea",),
 }
+
+DAG_RULES = (
+    "PCA → neighbors → UMAP/Leiden before cluster DE (rank_genes_groups / FindMarkers)",
+    "PCA → neighbors → UMAP/Leiden before DPT / PAGA / Palantir / Monocle3 / scVelo",
+    "condition DE needs annotation groupby (pseudobulk), not a raw cluster id list",
+    "pathway GSEA/ORA after clustering (and DE when present); gene-set choice > method",
+)
 
 
 def _neighbors_prereq(integrator: str | None) -> str:
-    if integrator in {"harmony", "scvi", "cca"}:
+    if integrator in {"harmony", "scvi", "cca", "bbknn"}:
         return integrator
     return "pca"
 
 
-def expand_goals(goals: set[str], *, integrator: str | None = None) -> list[str]:
-    """Topological expansion. neighbors wait on the integrator when one is selected."""
+def effective_deps(integrator: str | None = None) -> dict[str, list[str]]:
     deps = {k: list(v) for k, v in DEPS.items()}
     deps["neighbors"] = [_neighbors_prereq(integrator)]
+    return deps
+
+
+def expand_goals(goals: set[str], *, integrator: str | None = None) -> list[str]:
+    """Topological expansion. neighbors wait on the integrator when one is selected."""
+    deps = effective_deps(integrator)
     if integrator:
         goals = set(goals) | {integrator}
     needed: set[str] = set()
@@ -76,6 +93,18 @@ def expand_goals(goals: set[str], *, integrator: str | None = None) -> list[str]
     if len(order) != len(needed):
         return sorted(needed)
     return order
+
+
+def serialize_dag(route: list[str], *, integrator: str | None = None) -> dict:
+    deps = effective_deps(integrator)
+    nodes = list(route)
+    edges = [{"from": p, "to": n} for n in nodes for p in deps.get(n, []) if p in nodes]
+    return {
+        "loop": "plan-and-solve",
+        "nodes": nodes,
+        "edges": edges,
+        "rules": list(DAG_RULES),
+    }
 
 
 def resolve_route(

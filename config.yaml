@@ -61,8 +61,9 @@ rag:
     - methods
     - markers
     - best_practices
+    - sops
   collection_dirs:
-    best_practices: best_practices/reference
+    best_practices: best_practices   # reference/ 摘要 + update-kb 写入的 upstream/
 
 checkpoint:
   backend: sqlite             # sqlite | memory | redis
@@ -70,13 +71,14 @@ checkpoint:
   redis_url: null             # 例如 redis://localhost:6379
 
 analysis:
-  language: python   # python（现有 skills 主路径）| r（仅规划，不生成 Seurat 代码）
+  language: python   # python（Scanpy/Squidpy 可执行）| r（双重格式 Seurat Rmd，scAgent 不跑 R kernel）
+  executor: jupyter        # jupyter=nbclient/ipykernel，无 OS jail；subprocess=旧 seatbelt/bwrap
   max_review_retries: 2
   execute_code: false
   timeout_seconds: 600
   seed: 0
 
-# LLM 生成代码的执行隔离。enabled=false 则退回普通 subprocess（仅调试）。
+# OS jail 仅在 analysis.executor=subprocess 时启用。jupyter 路径仍做静态 policy + schema。
 sandbox:
   enabled: true
   isolation: auto          # auto=seatbelt(macOS)/bwrap(Linux)；rlimit；off；docker（需 SCAGENT_DOCKER_IMAGE）
@@ -103,16 +105,27 @@ qc:
     n_genes_min: null
     n_genes_max: null
   overfilter_warn_pct: 30
-  remove_doublets: false      # true 或 CLI --remove-doublets：按 predicted_doublet 过滤
+  remove_doublets: false      # true 或 CLI --remove-doublets：按共识 predicted_doublet 过滤
   doublet_rate_max: 0.10      # 预测双细胞比例超过此值则审查警告/失败
+  doublet_methods: auto       # auto | scrublet | both。auto：多样本/复杂组织 Scrublet+scDblFinder（无 R 则表达模拟）
+
+# 组间差异表达：按 sample × cell type 加和 raw counts，禁止 cell-level Wilcoxon 当结论。
+deg:
+  engine: auto                # auto | edger | deseq2 | ttest。auto：rpy2 edgeR → DESeq2 → Rscript → t-test+BH
+  marker_method: auto         # auto=wilcoxon；t-test | mast | wilcoxon。cluster marker，不是组间结论
+  cross_validate: auto        # auto=开：第二检验交叉验证基因列表；off 可关；任务里写「只用 Wilcoxon」则关
+  min_cells: 10
+  min_replicates: 2
   regress_cell_cycle: auto    # auto | none | always；auto 在明显周期信号时 regress
 
-# 可选模块。batch=auto 时由样本数/细胞数选择；none 表示不做整合。
-# cca：Python 用 Scanorama（MNN/CCA 风格）；真正的 Seurat CCA 需 R，本仓库不生成半成品 Seurat。
+# 可选模块。batch=auto 时 inspect 检测到多样本/批次列则自动校正；none 表示不做整合。
+# auto：小数据 Harmony；≥10 万细胞或 ≥8 样本 scVI。cca/scanorama=Scanorama；bbknn 改邻居图（缺包则回退 Harmony）。
+# 样本与条件 1:1 共线时 auto 跳过。真正的 Seurat CCA 需 R，本仓库不生成半成品 Seurat。
 modules:
-  batch: auto                 # auto | none | harmony | scvi | cca
+  batch: auto                 # auto | none | harmony | scvi | cca | scanorama | bbknn
   imputation: none            # none | magic | alra
   ambient: auto               # auto | none | soupx | decontx；brain/tumor 的 auto → soupx
+  trajectory: auto            # auto=按组织/spliced 层评估连续性；force=用户要轨迹也拟合；off=关
 
 # 整合质量（scIB iLISI/kBET 优先；否则 PCA 批次 R²）。未达标审查失败并触发重试。
 integration:
