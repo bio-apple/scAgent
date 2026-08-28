@@ -1,21 +1,21 @@
 # Domínguez Conde et al. 2022 — Cross-tissue immune cell analysis (CellTypist)
 
-Science. 逻辑回归参考注释；提供多组织免疫模型。
+Science. Logistic-regression reference annotation; multi-tissue immune models.
 
-## 用法
+## Usage
 
-- 输入：log1p 归一化到约 10^4 counts/cell 的 AnnData。
-- 输出：per-cell 标签 + 可选 majority vote（按 Leiden 簇平滑）。
-- 置信度 < 0.5 的细胞必须人工审查，可能是 doublet、过渡态或参考缺失类型。
+- Input: log1p-normalized AnnData (~10^4 counts/cell).
+- Output: per-cell labels + optional majority vote (Leiden-smoothed).
+- Confidence < 0.5: manual review—doublet, transition state, or missing reference type.
 
-## 分层证据（注释不允许单基因定论）
+## Layered evidence (no single-gene labels)
 
-1. 无偏聚类（Leiden，resolution 由稳定性和 marker 可解释性校准）。
-2. 参考映射（CellTypist / Azimuth / scANVI / popV）。
-3. 至少两个独立 canonical marker + 阴性 marker 验证。
-4. 与组织/疾病语境一致的命名（HCA 社区命名）。
+1. Unbiased clustering (Leiden; resolution from stability + marker interpretability).
+2. Reference mapping (CellTypist / Azimuth / scANVI / popV).
+3. ≥2 independent canonical positive markers + negative markers.
+4. Naming consistent with tissue/disease context (HCA community names).
 
-## 失效
+## Failure modes
 
-- 肿瘤微环境、发育阶段错配、跨物种直接套用成人免疫模型。
-- popV（Luecken 2024）在需要 ensemble 不确定性时作为升级路径。
+- Tumor microenvironment, developmental mismatch, cross-species adult immune models applied blindly.
+- popV (Luecken 2024) when ensemble uncertainty is needed.

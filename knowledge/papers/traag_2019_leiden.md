@@ -1,10 +1,10 @@
 # Traag, Waltman & van Eck 2019 — From Louvain to Leiden
 
-Scientific Reports. Leiden 修复 Louvain 的 disconnected community 问题。
+Scientific Reports. Leiden fixes Louvain disconnected-community issues.
 
-## 对聚类的约束
+## Clustering constraints
 
-- 默认 Leiden。resolution 不是 0.8 教条，要用簇稳定性、marker 可分性、生物学粒度来校准。
-- 过聚类：同一细胞类型碎成许多簇 → reviewer 应警告 UMAP/Leiden 过细。
-- 欠聚类：明显不同 lineage 被合并 → 提高 resolution 或分层聚类。
-- 发育连续谱上，离散簇是近似；需要轨迹时改用 PAGA / 拟时序，并声明假设。
+- Default Leiden. Resolution is not fixed at 0.8—calibrate with stability, marker separability, biological granularity.
+- Over-clustering: one type split into many clusters → reviewer warns UMAP/Leiden too fine.
+- Under-clustering: distinct lineages merged → raise resolution or hierarchical clustering.
+- On developmental continua, discrete clusters are approximate; use PAGA / pseudotime and state assumptions.

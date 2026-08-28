@@ -26,12 +26,12 @@ def test_rag_best_practices_qc():
     assert "qc.md" in blob or "quality control" in blob
 
 
-def test_rag_mito_qc_chinese():
+def test_rag_mito_qc_papers():
     _refresh()
-    hits = retrieve("线粒体 QC MAD 阈值 肿瘤", collection="papers", top_k=5)
+    hits = retrieve("mitochondrial QC MAD tumor Yates", collection="papers", top_k=5)
     assert hits
     blob = " ".join(h["text"] + h["source"] for h in hits)
-    assert "Yates" in blob or "线粒体" in blob
+    assert "Yates" in blob or "mitochondrial" in blob.lower()
 
 
 def test_hybrid_chinese_batch_hits_harmony():

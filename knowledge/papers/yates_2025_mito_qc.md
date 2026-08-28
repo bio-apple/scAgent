@@ -1,14 +1,14 @@
 # Yates et al. 2025 — Reconsidering mitochondrial QC cutoffs
 
-Genome Biology. 质疑把高线粒体比例细胞一律当作濒死细胞过滤掉。
+Genome Biology. Challenges filtering all high-mito cells as dying.
 
-## 要点
+## Key points
 
-- 线粒体比例升高可能是技术问题（破膜），也可能是真实生物学（代谢活跃、心肌、部分肿瘤、应激）。
-- 固定 10% 或 5% cutoff 会在肿瘤和代谢研究中系统丢掉细胞。
-- 正确做法：看 `pct_counts_mt` 与 `n_counts` 的 scatter；用 MAD 找离群；结合组织先验；在报告中写明移除数量与理由。
+- High mito fraction may be technical (membrane rupture) or biological (metabolic tissue, some tumors, stress).
+- Fixed 10% or 5% cutoffs systematically drop cells in tumor and metabolic studies.
+- Correct approach: scatter `pct_counts_mt` vs `n_counts`; MAD outliers; tissue priors; report counts removed and rationale.
 
-## 与 OSCA / emptyDrops 的关系
+## Relation to OSCA / emptyDrops
 
-- Cell calling 用 barcode rank / emptyDrops，不要只靠 n_genes>200。
-- QC 可视化三件套：**Violin、Scatter、MAD 判断**（本项目 qc_expert 硬性输出）。
+- Cell calling: barcode rank / emptyDrops—not `n_genes>200` alone.
+- QC trio: **Violin, Scatter, MAD decision** (required qc_expert outputs in this project).

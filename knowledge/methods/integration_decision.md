@@ -1,10 +1,10 @@
-# 整合是决策不是默认
+# Integration is a decision, not a default
 
-| 场景 | 建议 |
-|------|------|
-| 多样本技术批次，细胞类型应共享 | Harmony，然后 scIB 双维度检查 |
-| 非线性批次 / 需要生成模型 | scVI |
-| 同质生物学重复，主要做 DE | 先 merge，批次作为协变量 |
-| 处理与 batch 完全共线 | 不能“去批次”，否则删掉处理效应 |
+| Scenario | Recommendation |
+|----------|----------------|
+| Multi-sample technical batch, shared cell types | Harmony, then scIB dual-metric check |
+| Nonlinear batch / generative model needed | scVI |
+| Homogeneous biological replicates, DE-focused | Merge first; batch as covariate |
+| Treatment fully collinear with batch | Do not “remove batch”—you remove treatment signal |
 
-UMAP 混匀 ≠ 成功。Overcorrection 会让疾病差异消失。
+UMAP mixing ≠ success. Overcorrection erases disease differences.
