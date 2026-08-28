@@ -9,13 +9,7 @@ from typing import Any
 
 from scagent.config import REPO_ROOT
 
-def _catalog_path() -> Path:
-    new = REPO_ROOT / "knowledge" / "disease_signature" / "cell_states.json"
-    old = REPO_ROOT / "knowledge" / "evidence" / "cell_states.json"
-    return new if new.is_file() else old
-
-
-CATALOG_PATH = _catalog_path()
+CATALOG_PATH = REPO_ROOT / "knowledge" / "disease_signature" / "cell_states.json"
 SKIP_LABELS = {"", "unknown", "unassigned", "unvalidated", "mixed", "none", "nan"}
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.I)
 

@@ -437,7 +437,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-write-config", action="store_true", help="Do not write config.local.yaml")
     s.set_defaults(func=cmd_init)
 
-    s = sub.add_parser("ingest", help="Index knowledge/ (papers, methods, markers, best_practices, sops, upstream)")
+    s = sub.add_parser(
+        "ingest",
+        help="Rebuild knowledge/.index/ for all 10 collections (cell_ontology, marker_db, pathway, disease_signature, tissue_reference, papers, methods, best_practices, sops, upstream)",
+    )
     s.set_defaults(func=cmd_ingest)
 
     s = sub.add_parser(
@@ -461,10 +464,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--name", default=None, help="Target filename or subdirectory under sops/")
     s.set_defaults(func=cmd_add_doc)
 
-    s = sub.add_parser("retrieve", help="Query RAG collections")
+    s = sub.add_parser("retrieve", help="Query RAG: default fused across all collections; use --collection or --collections for subsets")
     s.add_argument("query")
-    s.add_argument("--collection", default=None, help="Single collection (default: fused across knowledge/)")
-    s.add_argument("--collections", default=None, help="Comma-separated, e.g. papers,markers,best_practices")
+    s.add_argument("--collection", default=None, help="Single collection (e.g. marker_db, best_practices)")
+    s.add_argument(
+        "--collections",
+        default=None,
+        help="Comma-separated subset, e.g. papers,marker_db,cell_ontology,best_practices",
+    )
     s.add_argument("--top-k", type=int, default=None, help="Number of chunks to return")
     s.set_defaults(func=cmd_retrieve)
 

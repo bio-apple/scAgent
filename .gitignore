@@ -17,10 +17,8 @@ outputs/*
 !outputs/.gitkeep
 knowledge/.index/
 .cache/
-best_practices/upstream/
 knowledge/upstream/
 knowledge/sops/**
-!knowledge/sops/README.md
 *.h5ad
 !tests/data/*.h5ad
 !tests/data/**/*.h5ad

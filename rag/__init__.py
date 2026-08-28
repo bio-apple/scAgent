@@ -1,1 +1,1 @@
-"""RAG over knowledge/ (papers, methods, markers, best_practices, sops, upstream)."""
+"""RAG over knowledge/ (fused collections; see README.en.md)."""

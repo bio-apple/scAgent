@@ -64,7 +64,7 @@ rag:
   embed_model: sentence-transformers/all-MiniLM-L6-v2
   candidate_k: 24
   rrf_k: 60
-  # fused = 跨 collection 一次检索；best_practices SOP 按分析路线加权
+  # fused = 跨 10 个 collection；见 README.en.md § Knowledge base
   default_collection: fused
   collections:
     - cell_ontology
