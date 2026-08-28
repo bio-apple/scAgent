@@ -64,7 +64,7 @@ rag:
   embed_model: sentence-transformers/all-MiniLM-L6-v2
   candidate_k: 24
   rrf_k: 60
-  # fused = 跨 10 个 collection；见 README.en.md § Knowledge base
+  # fused = all 10 collections; see README.md § Knowledge base
   default_collection: fused
   collections:
     - cell_ontology

@@ -1,1 +1,1 @@
-"""RAG over knowledge/ (fused collections; see README.en.md)."""
+"""RAG over knowledge/ (fused collections; see README.md)."""

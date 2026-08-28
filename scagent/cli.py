@@ -399,7 +399,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="scagent",
-        description="LangGraph single-cell RNA-seq analysis agent. See README.en.md for full CLI reference.",
+        description="LangGraph single-cell RNA-seq analysis agent. See README.md for full CLI reference.",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
