@@ -70,7 +70,7 @@ def test_end_to_end_without_llm(tmp_path):
         execute_code=False,
         checkpointer=MemorySaver(),
     )
-    assert "scanpy-scrna-seq" in (state.get("skills_used") or [])
+    assert "qc_preprocessing" in (state.get("skills_used") or [])
     assert (state.get("plan") or {}).get("loop") == "plan-and-solve"
     assert (state.get("plan") or {}).get("collaboration") == "multi-agent"
     assert {a["id"] for a in (state.get("plan") or {}).get("agents") or []} >= {"qc_preprocess", "cluster_deg", "bio_interpret", "code_audit"}

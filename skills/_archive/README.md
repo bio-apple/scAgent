@@ -1,12 +1,8 @@
-# Archived skills (not loaded by scAgent)
+# Archived skills (not loaded)
 
-Out of scope for the default **scRNA-seq analysis** product focus:
+- `legacy_granular/` — former tool-level cookbooks (scanpy-scrna-seq, celltypist-*, spatial-*, ATAC, …)
+- Other top-level folders — shell agents / broken CLIs from earlier cleanups
 
-- Spatial transcriptomics / proteomics / imaging mass cytometry
-- scATAC / multiome / multimodal integration packs
-- TCR/BCR repertoire, CRISPR/perturb-seq screens
-- Shell agents and broken CLI wrappers (earlier archive)
+**Active product skills** are the 10 scientific-task packs under `skills/*/SKILL.md`:
 
-Active skills stay under `skills/*/SKILL.md` (~34 cookbooks: QC → cluster → annotate → integrate → trajectory / CellChat / SCENIC).
-
-Restore by moving a folder back to `skills/<name>/`.
+dataset_loader → qc_preprocessing → integration_batch → clustering_embedding → cell_annotation → deg_pathway / trajectory → cell_communication → visualization → report_generation

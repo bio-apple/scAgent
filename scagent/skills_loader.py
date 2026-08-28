@@ -1,4 +1,4 @@
-"""Discover and recommend bundled analysis skills under skills/*/SKILL.md."""
+"""Discover and recommend scientific-task skills (one skill ≈ one analysis stage)."""
 
 from __future__ import annotations
 
@@ -12,54 +12,44 @@ from scagent.config import REPO_ROOT, load_config, resolve_path
 
 _FRONTMATTER = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 _MANIFEST_PATH = REPO_ROOT / "skills" / "awesome_single_cell_manifest.json"
-_TOKEN = re.compile(r"[a-z][a-z0-9_-]{2,}")
-_STOP = {
-    "the",
-    "and",
-    "for",
-    "with",
-    "from",
-    "this",
-    "that",
-    "use",
-    "when",
-    "data",
-    "using",
-    "analysis",
-    "skill",
-    "workflow",
-}
 
-# Lean core for a standard scRNA run; topic skills (CellChat, census, …) added on demand.
-_CORE_SKILLS = (
-    "anndata-data-structure",
-    "scanpy-scrna-seq",
-    "harmony-batch-correction",
-    "scvi-tools-single-cell",
-    "single-cell-annotation-guide",
-    "single-cell-annotation",
-    "celltypist-cell-annotation",
+# Canonical scientific-task skills (order = default analysis DAG).
+TASK_SKILLS: tuple[str, ...] = (
+    "dataset_loader",
+    "qc_preprocessing",
+    "integration_batch",
+    "clustering_embedding",
+    "cell_annotation",
+    "deg_pathway",
+    "trajectory",
+    "cell_communication",
+    "visualization",
+    "report_generation",
 )
 
-# Archived packs live under skills/_archive/ and are not discovered.
-_ARCHIVE_DIRNAME = "_archive"
+# Always include for a standard scRNA run.
+_CORE_SKILLS = (
+    "dataset_loader",
+    "qc_preprocessing",
+    "clustering_embedding",
+    "cell_annotation",
+    "visualization",
+    "report_generation",
+)
 
-# Planner prompt: recommended first, then fill up to this many lines.
-_DEFAULT_CATALOG_LIMIT = 40
+_DEFAULT_CATALOG_LIMIT = 20
 
 _CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("trajectory", ("trajectory", "pseudotime", "velocity", "lineage", "monocle", "palantir", "拟时序", "轨迹")),
-    ("communication", ("communication", "cellchat", "nichenet", "liana", "ligand", "cellphonedb", "通讯", "配体")),
-    ("annotation", ("annotat", "celltypist", "azimuth", "singler", "popv", "cell-type", "注释")),
-    ("integration", ("batch", "harmony", "scvi", "integrat", "整合", "批次")),
-    ("grn", ("grn", "scenic", "regulon", "arboreto", "gene-regulatory", "调控")),
-    ("qc", ("qc", "preprocess", "doublet", "normaliz", "质控", "预处理", "sparse", "io")),
-    ("clustering", ("cluster", "leiden", "pca", "umap", "聚类")),
-    ("atlas", ("atlas", "census", "mapping", "lamindb")),
-)
-
-_TOPIC_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = tuple(
-    (needles, needles) for _, needles in _CATEGORIES
+    ("io", ("dataset_loader", "load", "10x", "h5ad")),
+    ("qc", ("qc_preprocessing", "preprocess", "doublet", "质控")),
+    ("integration", ("integration_batch", "harmony", "batch", "整合")),
+    ("clustering", ("clustering_embedding", "leiden", "umap", "pca", "聚类")),
+    ("annotation", ("cell_annotation", "celltypist", "marker", "注释")),
+    ("deg", ("deg_pathway", "differential", "gsea", "pathway", "差异")),
+    ("trajectory", ("trajectory", "pseudotime", "velocity", "轨迹")),
+    ("communication", ("cell_communication", "cellchat", "ligand", "通讯")),
+    ("viz", ("visualization", "plot", "figure")),
+    ("report", ("report_generation", "report", "methods")),
 )
 
 
@@ -73,7 +63,6 @@ class Skill:
 
 
 def _strip_leading_noise(text: str) -> str:
-    """Drop HTML comments / BOM so YAML frontmatter can be parsed."""
     text = (text or "").lstrip("\ufeff")
     while True:
         s = text.lstrip()
@@ -127,6 +116,9 @@ def list_skills(root: Path | None = None) -> list[Skill]:
                 references=refs,
             )
         )
+    # Stable DAG order for known task skills.
+    rank = {n: i for i, n in enumerate(TASK_SKILLS)}
+    skills.sort(key=lambda s: (rank.get(s.name, 1000), s.name))
     return skills
 
 
@@ -153,45 +145,8 @@ def _truncate(text: str, limit: int = 140) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def _topic_query(metadata: dict | None, query: str | None) -> str:
-    meta = metadata or {}
-    parts = [
-        str(meta.get("task") or ""),
-        str(meta.get("query") or ""),
-        str(meta.get("user_query") or ""),
-        str(query or ""),
-        str(meta.get("tissue") or ""),
-        str(meta.get("platform") or ""),
-        str(meta.get("integrator") or ""),
-        " ".join(str(x) for x in (meta.get("intents") or [])),
-        " ".join(str(x) for x in (meta.get("route") or [])),
-    ]
-    return " ".join(parts).lower()
-
-
-def _tokens(text: str) -> set[str]:
-    return {t for t in _TOKEN.findall(text.lower()) if t not in _STOP}
-
-
-def _skill_score(skill: Skill, topic: str) -> int:
-    hay = f"{skill.name} {skill.description}".lower()
-    score = 0
-    if skill.name in _CORE_SKILLS:
-        score += 8
-    for triggers, needles in _TOPIC_KEYWORDS:
-        if any(t in topic for t in triggers) and any(n in hay for n in needles):
-            score += 6
-            break
-    overlap = _tokens(topic) & _tokens(hay)
-    score += min(5, len(overlap))
-    for word in _tokens(topic):
-        if len(word) >= 5 and word in hay:
-            score += 1
-    return score
-
-
 def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
-    """Score bundled skills against the task; always keep lean SciAgent core."""
+    """Select scientific-task skills from route / design (not algorithm primitives)."""
     skills = list_skills()
     if not skills:
         return []
@@ -204,27 +159,37 @@ def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
                 selected.append(c)
 
     add(*_CORE_SKILLS)
-    tissue = str(metadata.get("tissue") or "").lower()
+    route = [str(x).lower() for x in (metadata.get("route") or [])]
+    intents = [str(x).lower() for x in (metadata.get("intents") or [])]
+    topic = " ".join(
+        [
+            str(metadata.get("user_query") or ""),
+            str(metadata.get("task") or ""),
+            " ".join(route),
+            " ".join(intents),
+        ]
+    ).lower()
+
     n_samples = int(metadata.get("n_samples") or 1)
     need_batch = bool(metadata.get("need_batch_correction")) or n_samples > 1
-    integrator = metadata.get("integrator")
-    if need_batch or integrator:
-        add("harmony-batch-correction", "scvi-tools-single-cell", "bio-single-cell-batch-integration")
-    add("bio-single-cell-markers-annotation", "bio-single-cell-cell-annotation", "bio-single-cell-preprocessing")
-    if tissue in {"pbmc", "blood", "immune"} or metadata.get("use_popv"):
-        add("popv-cell-annotation")
-    if metadata.get("use_census") or "atlas" in str(metadata.get("task") or "").lower():
-        add("cellxgene-census", "bio-machine-learning-atlas-mapping")
-    if language != "python":
-        add("scanpy-scrna-seq", "Single-Cell RNA-seq Core Analysis (Seurat)")
+    if need_batch or metadata.get("integrator") or "harmony" in topic or "integrat" in topic:
+        add("integration_batch")
 
-    topic = _topic_query(metadata, metadata.get("user_query") or metadata.get("task"))
-    ranked = sorted((_skill_score(s, topic), s.name) for s in skills)
-    for score, name in reversed(ranked):
-        if score >= 6:
-            add(name)
-        if len(selected) >= 24:
-            break
+    if any(k in topic for k in ("deg", "differen", "marker", "gsea", "pathway", "pseudobulk", "差异", "通路")) or any(
+        x in route for x in ("deg", "gsea", "enrichment")
+    ):
+        add("deg_pathway")
+
+    if any(k in topic for k in ("traject", "pseudotime", "velocity", "monocle", "slingshot", "命运", "轨迹")) or any(
+        x in route for x in ("trajectory", "paga", "dpt")
+    ):
+        add("trajectory")
+
+    if any(k in topic for k in ("cellchat", "communication", "ligand", "nichenet", "通讯", "配体")):
+        add("cell_communication")
+
+    # Always finish with viz + report when core ran.
+    add("visualization", "report_generation")
     return selected
 
 
@@ -235,7 +200,6 @@ def skill_catalog_text(
     *,
     limit: int | None = _DEFAULT_CATALOG_LIMIT,
 ) -> str:
-    """Catalog for planner prompts: recommended first, then fill up to limit."""
     skills = list_skills(root) if root else list_skills()
     if not skills:
         return "(no skills found)"
@@ -243,38 +207,22 @@ def skill_catalog_text(
     if query:
         md.setdefault("user_query", query)
         md.setdefault("task", query)
-    rec_list = recommend_skills(md) if (metadata or query) else []
+    rec_list = recommend_skills(md) if (metadata or query) else list(TASK_SKILLS)
     recommended = set(rec_list)
-    by_name = {s.name: s for s in skills}
-    topic = _topic_query(md, query)
-    lines = [f"bundled skills: {len(skills)} (showing up to {limit or len(skills)})"]
+    lines = [
+        f"bundled scientific-task skills: {len(skills)}",
+        "principle: one skill = one research task (not PCA/UMAP/Leiden primitives)",
+    ]
     if rec_list:
         lines.append("recommended for this task: " + ", ".join(rec_list))
-
-    ordered: list[Skill] = []
-    seen: set[str] = set()
-    for name in rec_list:
-        if name in by_name and name not in seen:
-            ordered.append(by_name[name])
-            seen.add(name)
-    for skill in sorted(skills, key=lambda s: -_skill_score(s, topic)):
-        if skill.name not in seen:
-            ordered.append(skill)
-            seen.add(skill.name)
-
+    lines.append("## tasks")
     shown = 0
-    last_cat = None
-    for skill in ordered:
+    for skill in skills:
         if limit is not None and shown >= limit:
-            remaining = len(skills) - shown
-            lines.append(f"... +{remaining} more (`python -m scagent skills`)")
+            lines.append(f"... +{len(skills) - shown} more (`python -m scagent skills`)")
             break
-        cat = skill_category(skill)
-        if cat != last_cat:
-            lines.append(f"## {cat}")
-            last_cat = cat
         mark = "*" if skill.name in recommended else "-"
-        lines.append(f"{mark} {skill.name}: {_truncate(skill.description or skill.name, 100)}")
+        lines.append(f"{mark} {skill.name}: {_truncate(skill.description or skill.name, 110)}")
         shown += 1
     return "\n".join(lines)
 
@@ -301,57 +249,46 @@ def awesome_manifest() -> dict | None:
 
 
 PHASE_SKILLS = {
-    "qc": ["anndata-data-structure", "scanpy-scrna-seq", "bio-single-cell-preprocessing", "bio-single-cell-doublet-detection"],
+    "qc": ["dataset_loader", "qc_preprocessing"],
     "downstream": [
-        "scanpy-scrna-seq",
-        "harmony-batch-correction",
-        "scvi-tools-single-cell",
-        "single-cell-annotation-guide",
-        "single-cell-annotation",
-        "celltypist-cell-annotation",
-        "bio-single-cell-clustering",
-        "bio-single-cell-markers-annotation",
+        "integration_batch",
+        "clustering_embedding",
+        "cell_annotation",
+        "deg_pathway",
+        "visualization",
     ],
 }
 
-# Word-boundary style hints (avoid bare "io" matching "annotation" / "communication").
 _PHASE_HINTS = {
-    "qc": ("qc", "preprocess", "anndata", "scanpy", "doublet", "data-io", "sparse", "normaliz", "filter"),
+    "qc": ("dataset_loader", "qc_preprocessing", "qc", "preprocess", "load"),
     "downstream": (
+        "integration_batch",
+        "clustering_embedding",
+        "cell_annotation",
+        "deg_pathway",
+        "trajectory",
+        "cell_communication",
+        "visualization",
+        "report_generation",
         "cluster",
         "annotat",
-        "harmony",
-        "scvi",
-        "marker",
-        "celltypist",
-        "popv",
-        "trajectory",
-        "cellchat",
-        "communication",
-        "grn",
-        "scenic",
-        "velocity",
-        "lineage",
-        "azimuth",
-        "atlas",
-        "census",
+        "integrat",
+        "deg",
+        "pathway",
+        "traject",
+        "communicat",
+        "visual",
+        "report",
     ),
 }
 
 
 def _hint_match(name: str, hints: tuple[str, ...]) -> bool:
     low = name.lower()
-    for h in hints:
-        if len(h) <= 3:
-            if re.search(rf"(^|[-_]){re.escape(h)}($|[-_])", low):
-                return True
-        elif h in low:
-            return True
-    return False
+    return any(h in low for h in hints)
 
 
 def skills_for_phase(phase: str, plan_skills: list[str] | None = None, *, max_extra: int = 6) -> list[str]:
-    """Core phase skills plus task-selected skills from the catalog."""
     available = {s.name for s in list_skills()}
     wanted = [n for n in (PHASE_SKILLS.get(phase) or []) if n in available]
     hints = _PHASE_HINTS.get(phase) or ()

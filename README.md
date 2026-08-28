@@ -1,6 +1,6 @@
 # Single-Cell RNA-seq Analysis Agent
 
-LangGraph agent for single-cell bioinformatics: **tissue-aware QC, execution review, auditable scripts**. Focus: **scRNA-seq analysis** (~34 active skills). [`knowledge/`](README.md#knowledge-base) fused RAG + structured KB. Agents retrieve **parsed paper passages** (MinerU) and cite them in the report.
+LangGraph agent for single-cell bioinformatics: **tissue-aware QC, execution review, auditable scripts**. Focus: **scRNA-seq** with **10 scientific-task skills** (not PCA/UMAP primitives). [`knowledge/`](README.md#knowledge-base) fused RAG + structured KB. Agents retrieve **parsed paper passages** (MinerU) and cite them in the report.
 
 ## Quick start
 
@@ -112,13 +112,24 @@ Planner / QC / Annotation / Interpretation call phase-aware `search_paper_knowle
 
 ## Skills layout
 
-| Path | Role |
-|------|------|
-| `skills/*/SKILL.md` | Active **scRNA-seq** cookbooks (~34): QC → cluster → annotate → integrate → trajectory / CellChat / SCENIC |
-| `skills/_archive/` | Spatial / ATAC / imaging / TCR / perturb / shell agents — **not loaded** |
-| `knowledge/best_practices/` | Step decision SOPs (not the same as skills) |
+**Principle:** one skill = one scientific task (not NormalizeData / PCA / Leiden).
 
-`python -m scagent skills` lists active skills. Restore an archived pack by moving it back under `skills/<name>/`.
+| Skill | Task |
+|-------|------|
+| `dataset_loader` | 10x / H5 / H5AD / RDS → analysis object |
+| `qc_preprocessing` | QC + normalize + HVG + scale |
+| `integration_batch` | Harmony / scVI / CCA (optional) |
+| `clustering_embedding` | PCA → neighbors → Leiden → UMAP |
+| `cell_annotation` | CellTypist / markers / dual validation |
+| `deg_pathway` | Markers or pseudobulk DE + GO/KEGG/GSEA |
+| `trajectory` | Pseudotime / Monocle3 / velocity |
+| `cell_communication` | CellChat / CellPhoneDB |
+| `visualization` | Paper-style figures |
+| `report_generation` | Markdown / HTML / methods |
+
+Granular / spatial / ATAC cookbooks live under `skills/_archive/` (not loaded). Step decision SOPs remain in `knowledge/best_practices/`.
+
+`python -m scagent skills` lists the 10 active tasks.
 
 ## Troubleshooting
 

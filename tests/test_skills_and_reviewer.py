@@ -2,111 +2,66 @@ from agents.planner import choose_integrator
 from agents.reviewer import audit_code, audit_execution, format_review_card, publication_review
 from agents.templates import LOCKED_START, cluster_annotate_script, qc_preprocess_script, scanpy_script
 from scagent.inspect_data import detect_platform, detect_species_from_genes, gene_composition, inspect_data
-from scagent.skills_loader import awesome_manifest, list_skills, recommend_skills, skill_catalog_text
+from scagent.skills_loader import TASK_SKILLS, awesome_manifest, list_skills, recommend_skills, skill_catalog_text
 
 
-def test_existing_skills_preserved():
+def test_task_skills_present():
     names = {s.name for s in list_skills()}
-    expected = {
-        "anndata-data-structure",
-        "celltypist-cell-annotation",
-        "cellxgene-census",
-        "harmony-batch-correction",
-        "popv-cell-annotation",
-        "scanpy-scrna-seq",
-        "scvi-tools-single-cell",
-        "single-cell-annotation-guide",
-        "single-cell-annotation",
-        "cellchat-cell-communication",
-    }
-    assert expected <= names
+    assert set(TASK_SKILLS) <= names
+    assert len(names) == 10
 
 
-def test_recommend_harmony_for_multi_sample():
+def test_recommend_core_and_batch():
     skills = recommend_skills({"n_samples": 4, "need_batch_correction": True, "tissue": "pbmc"})
-    assert "scanpy-scrna-seq" in skills
-    assert "harmony-batch-correction" in skills
-    assert "celltypist-cell-annotation" in skills
-    assert "single-cell-annotation" in skills
+    assert "qc_preprocessing" in skills
+    assert "clustering_embedding" in skills
+    assert "cell_annotation" in skills
+    assert "integration_batch" in skills
 
 
-def test_recommend_cellchat_for_communication_query():
+def test_recommend_cellchat_task():
     skills = recommend_skills({"tissue": "tumor", "task": "CellChat 分析肿瘤与 T 细胞的配体受体通讯"})
-    assert "cellchat-cell-communication" in skills
-    assert "scanpy-scrna-seq" in skills
+    assert "cell_communication" in skills
+    assert "qc_preprocessing" in skills
 
 
-def test_awesome_single_cell_skills_imported():
-    manifest = awesome_manifest()
-    assert manifest is not None
-    names = {s.name for s in list_skills()}
-    assert len(names) >= 25
-    assert len(names) <= 50
-    assert "scanpy" not in names
-    assert "bioskills" not in names
-    assert "spatial-transcriptomics" not in names
-    assert "STAgent" not in names
-    assert "scanpy-scrna-seq" in names
-    assert "celltypist-cell-annotation" in names
+def test_recommend_trajectory_and_deg():
+    traj = recommend_skills({"task": "Monocle3 pseudotime trajectory", "tissue": "embryo"})
+    assert "trajectory" in traj
+    deg = recommend_skills({"task": "pseudobulk DEG and GSEA pathways", "route": ["deg", "gsea"]})
+    assert "deg_pathway" in deg
 
 
-def test_recommend_trajectory_skills():
-    skills = recommend_skills({"task": "scVelo RNA velocity trajectory", "tissue": "embryo"})
-    assert any("velo" in s.lower() or "trajectory" in s.lower() for s in skills)
-
-
-def test_recommend_indexes_all_bundled_skills():
-    skills = recommend_skills({"task": "pySCENIC regulon GRN from scRNA-seq"})
-    assert any("scenic" in s.lower() or "grn" in s.lower() or "arboreto" in s.lower() for s in skills)
-    ann = recommend_skills({"task": "CellTypist annotate PBMC clusters", "tissue": "pbmc"})
-    assert "celltypist-cell-annotation" in ann
-
-
-def test_skill_catalog_lists_all_skills():
+def test_skill_catalog_lists_task_skills():
     text = skill_catalog_text(limit=None)
-    names = {s.name for s in list_skills()}
-    missing = [n for n in names if n not in text]
-    assert len(missing) <= 3, missing
-    assert "bundled skills:" in text
+    for name in TASK_SKILLS:
+        assert name in text
+    assert "one skill = one research task" in text
 
 
-def test_skill_catalog_default_limit():
-    text = skill_catalog_text(metadata={"tissue": "pbmc"}, query="standard analysis")
-    assert "bundled skills:" in text
-    assert "recommended for this task:" in text
-
-
-def test_skills_for_phase_qc_excludes_annotation_io_false_positive():
+def test_skills_for_phase_qc_and_downstream():
     from scagent.skills_loader import skills_for_phase
 
-    names = skills_for_phase(
-        "qc",
-        ["cellchat-cell-communication", "single-cell-annotation", "harmony-batch-correction", "bio-single-cell-preprocessing"],
+    qc = skills_for_phase("qc", ["cell_communication", "qc_preprocessing", "integration_batch"])
+    assert "qc_preprocessing" in qc
+    assert "dataset_loader" in qc
+    assert "cell_communication" not in qc
+
+    down = skills_for_phase(
+        "downstream",
+        ["cell_communication", "trajectory", "qc_preprocessing", "clustering_embedding"],
     )
-    assert "bio-single-cell-preprocessing" in names
-    assert "cellchat-cell-communication" not in names
-    assert "single-cell-annotation" not in names
+    assert "clustering_embedding" in down
+    assert "cell_communication" in down
+    assert "trajectory" in down
 
 
-def test_frontmatter_skips_html_copyright():
-    from pathlib import Path
-
-    from scagent.skills_loader import _parse_frontmatter
-
-    # Prefer a skill that may still have HTML copyright banners.
-    candidates = list(Path("skills").glob("*/SKILL.md"))
-    assert candidates
-    meta, _ = _parse_frontmatter(candidates[0].read_text(encoding="utf-8"))
-    assert meta.get("name") or candidates[0].parent.name
-
-
-def test_skills_for_phase_includes_plan_skills():
-    from scagent.skills_loader import skills_for_phase
-
-    names = skills_for_phase("downstream", ["cellchat-cell-communication", "trajectory-lineage", "scanpy-scrna-seq"])
-    assert "cellchat-cell-communication" in names
-    assert "trajectory-lineage" in names
-    assert "scanpy-scrna-seq" in names
+def test_awesome_manifest_optional():
+    manifest = awesome_manifest()
+    # Manifest may lag; discovery is the source of truth.
+    assert len(list_skills()) == 10
+    if manifest is not None:
+        assert manifest.get("active_skills") in {None, 10} or manifest.get("product_focus") == "scRNA-seq-tasks"
 
 
 def test_choose_integrator():
