@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from agents.annotation import build_annotation_plan
+from scagent.best_practices_loader import practices_for_phase
 
 
 def build_cluster_deg_plan(state: dict) -> dict:
@@ -14,6 +15,11 @@ def build_cluster_deg_plan(state: dict) -> dict:
         "agent": "Clustering & Differential Agent",
         "tasks": ["neighbors", "umap", "leiden", "annotation", "cluster_markers", "deg", "trajectory"],
         "annotation": ann,
+        "best_practices": practices_for_phase(
+            "downstream",
+            route=list(plan.get("route") or []),
+            query=state.get("user_query"),
+        ),
         "needs_pseudobulk": bool(plan.get("needs_pseudobulk")),
         "force_pseudobulk_de": bool(plan.get("force_pseudobulk_de")),
         "n_replicates": plan.get("n_replicates"),

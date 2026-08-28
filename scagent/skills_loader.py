@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,8 +10,25 @@ from scagent.config import REPO_ROOT, load_config, resolve_path
 
 _FRONTMATTER = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 _MANIFEST_PATH = REPO_ROOT / "skills" / "awesome_single_cell_manifest.json"
+_TOKEN = re.compile(r"[a-z][a-z0-9_-]{2,}")
+_STOP = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "this",
+    "that",
+    "use",
+    "when",
+    "data",
+    "using",
+    "analysis",
+    "skill",
+    "workflow",
+}
 
-# Core SciAgent skills always considered for standard scRNA workflows.
+# Always activated for a standard scRNA run.
 _CORE_SKILLS = (
     "anndata-data-structure",
     "scanpy-scrna-seq",
@@ -24,19 +42,23 @@ _CORE_SKILLS = (
     "cellchat-cell-communication",
 )
 
-_TOPIC_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-    (("spatial", "visium", "squidpy", "giotto", "空间", "空转"), ("spatial", "visium", "squidpy", "giotto")),
-    (("trajectory", "pseudotime", "monocle", "palantir", "velocity", "轨迹", "拟时序"), ("trajectory", "pseudotime", "velocity", "lineage")),
-    (("doublet", "scrublet", "doubletfinder", "双细胞"), ("doublet",)),
-    (("scatac", "atac", "multiome", "signac", "archr"), ("atac", "multiome", "signac")),
-    (("perturb", "crispr screen", "crop-seq"), ("perturb", "crispr")),
-    (("scenic", "regulon", "grn", "gene regulatory"), ("scenic", "regulon", "grn")),
-    (("deconv", "去卷积"), ("deconv",)),
-    (("cell communication", "cellchat", "nichenet", "liana", "ligand", "细胞通讯", "配体"), ("communication", "cellchat", "nichenet", "liana")),
-    (("marker", "annotation", "cell type", "注释"), ("marker", "annotation", "cell-annotation")),
-    (("batch", "integration", "harmony", "批次", "整合"), ("batch", "integration")),
-    (("preprocess", "qc", "normalize", "质控", "预处理"), ("preprocess", "qc", "scrna", "scanpy")),
-    (("differential", "deg", "pseudobulk", "差异"), ("differential", "deg", "pseudobulk", "expression")),
+_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("spatial", ("spatial", "visium", "giotto", "squidpy", "xenium", "merfish", "deconv", "空转")),
+    ("trajectory", ("trajectory", "pseudotime", "velocity", "lineage", "monocle", "palantir", "拟时序", "轨迹")),
+    ("communication", ("communication", "cellchat", "nichenet", "liana", "ligand", "cellphonedb", "通讯", "配体")),
+    ("annotation", ("annotat", "celltypist", "azimuth", "singler", "popv", "cell-type", "注释")),
+    ("integration", ("batch", "harmony", "scvi", "integrat", "整合", "批次")),
+    ("atac", ("atac", "multiome", "signac", "archr", "chromatin", "cicero")),
+    ("grn", ("grn", "scenic", "regulon", "arboreto", "gene-regulatory", "调控")),
+    ("perturb", ("perturb", "crispr", "crop-seq", "screen")),
+    ("qc", ("qc", "preprocess", "doublet", "normaliz", "质控", "预处理")),
+    ("clustering", ("cluster", "leiden", "pca", "umap", "聚类")),
+    ("multimodal", ("multimodal", "cite-seq", "muon", "protein", "adt")),
+    ("repertoire", ("tcr", "bcr", "repertoire", "scirpy")),
+)
+
+_TOPIC_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = tuple(
+    (needles, needles) for _, needles in _CATEGORIES
 )
 
 
@@ -97,6 +119,14 @@ def get_skill(name: str, root: Path | None = None) -> Skill | None:
     return None
 
 
+def skill_category(skill: Skill) -> str:
+    hay = f"{skill.name} {skill.description}".lower()
+    for cat, needles in _CATEGORIES:
+        if any(n.lower() in hay for n in needles):
+            return cat
+    return "other"
+
+
 def _truncate(text: str, limit: int = 140) -> str:
     text = " ".join(text.split())
     if len(text) <= limit:
@@ -105,23 +135,78 @@ def _truncate(text: str, limit: int = 140) -> str:
 
 
 def _topic_query(metadata: dict | None, query: str | None) -> str:
+    meta = metadata or {}
     parts = [
-        str((metadata or {}).get("task") or ""),
-        str((metadata or {}).get("query") or ""),
+        str(meta.get("task") or ""),
+        str(meta.get("query") or ""),
+        str(meta.get("user_query") or ""),
         str(query or ""),
-        str((metadata or {}).get("tissue") or ""),
-        str((metadata or {}).get("platform") or ""),
+        str(meta.get("tissue") or ""),
+        str(meta.get("platform") or ""),
+        str(meta.get("integrator") or ""),
+        " ".join(str(x) for x in (meta.get("intents") or [])),
+        " ".join(str(x) for x in (meta.get("route") or [])),
     ]
     return " ".join(parts).lower()
 
 
-def _skill_matches_topic(skill: Skill, topic: str) -> bool:
+def _tokens(text: str) -> set[str]:
+    return {t for t in _TOKEN.findall(text.lower()) if t not in _STOP}
+
+
+def _skill_score(skill: Skill, topic: str) -> int:
     hay = f"{skill.name} {skill.description}".lower()
+    score = 0
+    if skill.name in _CORE_SKILLS:
+        score += 8
     for triggers, needles in _TOPIC_KEYWORDS:
-        if any(t in topic for t in triggers):
-            if any(n in hay for n in needles):
-                return True
-    return False
+        if any(t in topic for t in triggers) and any(n in hay for n in needles):
+            score += 6
+            break
+    overlap = _tokens(topic) & _tokens(hay)
+    score += min(5, len(overlap))
+    for word in _tokens(topic):
+        if len(word) >= 5 and word in hay:
+            score += 1
+    return score
+
+
+def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
+    """Score every bundled skill against the task; always keep SciAgent core."""
+    skills = list_skills()
+    if not skills:
+        return []
+    names = {s.name for s in skills}
+    selected: list[str] = []
+
+    def add(*cands: str) -> None:
+        for c in cands:
+            if c in names and c not in selected:
+                selected.append(c)
+
+    add(*_CORE_SKILLS)
+    tissue = str(metadata.get("tissue") or "").lower()
+    n_samples = int(metadata.get("n_samples") or 1)
+    need_batch = bool(metadata.get("need_batch_correction")) or n_samples > 1
+    integrator = metadata.get("integrator")
+    if need_batch or integrator:
+        add("harmony-batch-correction", "scvi-tools-single-cell", "bio-single-cell-batch-integration")
+    add("bio-single-cell-markers-annotation", "bio-single-cell-cell-annotation", "bio-single-cell-preprocessing")
+    if tissue in {"pbmc", "blood", "immune"} or metadata.get("use_popv"):
+        add("popv-cell-annotation")
+    if metadata.get("use_census") or "atlas" in str(metadata.get("task") or "").lower():
+        add("cellxgene-census", "bio-machine-learning-atlas-mapping")
+    if language != "python":
+        add("scanpy-scrna-seq", "Single-Cell RNA-seq Core Analysis (Seurat)")
+
+    topic = _topic_query(metadata, metadata.get("user_query"))
+    ranked = sorted((_skill_score(s, topic), s.name) for s in skills)
+    for score, name in reversed(ranked):
+        if score >= 6:
+            add(name)
+        if len(selected) >= 24:
+            break
+    return selected
 
 
 def _ranked_skills(metadata: dict | None = None, query: str | None = None) -> list[Skill]:
@@ -142,14 +227,7 @@ def _ranked_skills(metadata: dict | None = None, query: str | None = None) -> li
     for skill in skills:
         if skill.name in recommended:
             push(skill)
-    if topic:
-        for skill in skills:
-            if _skill_matches_topic(skill, topic):
-                push(skill)
-    for skill in skills:
-        if skill.name in _CORE_SKILLS:
-            push(skill)
-    for skill in skills:
+    for skill in sorted(skills, key=lambda s: -_skill_score(s, topic)):
         push(skill)
     return ranked
 
@@ -159,16 +237,39 @@ def skill_catalog_text(
     metadata: dict | None = None,
     query: str | None = None,
     *,
-    limit: int = 48,
+    limit: int | None = None,
 ) -> str:
-    skills = _ranked_skills(metadata, query)
+    """Full catalog grouped by topic so the planner can see every bundled skill."""
+    skills = list_skills(root) if root else list_skills()
     if not skills:
         return "(no skills found)"
-    lines: list[str] = []
-    for skill in skills[:limit]:
-        lines.append(f"- {skill.name}: {_truncate(skill.description)}")
-    if len(skills) > limit:
-        lines.append(f"... 另有 {len(skills) - limit} 个 skill（`python -m scagent skills` 查看完整列表）")
+    md = dict(metadata or {})
+    if query:
+        md.setdefault("user_query", query)
+        md.setdefault("task", query)
+    rec_list = recommend_skills(md) if (metadata or query) else []
+    recommended = set(rec_list)
+    grouped: dict[str, list[Skill]] = defaultdict(list)
+    for skill in skills:
+        grouped[skill_category(skill)].append(skill)
+    order = [c for c, _ in _CATEGORIES] + ["other"]
+    lines = [f"bundled skills: {len(skills)}"]
+    if rec_list:
+        lines.append("recommended for this task: " + ", ".join(rec_list))
+    shown = 0
+    for cat in order:
+        bucket = grouped.get(cat) or []
+        if not bucket:
+            continue
+        lines.append(f"## {cat}")
+        for skill in bucket:
+            if limit is not None and shown >= limit:
+                remaining = len(skills) - shown
+                lines.append(f"... 另有 {remaining} 个 skill（`python -m scagent skills`）")
+                return "\n".join(lines)
+            mark = "*" if skill.name in recommended else "-"
+            lines.append(f"{mark} {skill.name}: {_truncate(skill.description, 100)}")
+            shown += 1
     return "\n".join(lines)
 
 
@@ -193,70 +294,68 @@ def awesome_manifest() -> dict | None:
         return None
 
 
-def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
-    """Map analysis context onto bundled skills (SciAgent core + awesome-bio single-cell)."""
-    names = [s.name for s in list_skills()]
-    if not names:
-        return []
-    selected: list[str] = []
+PHASE_SKILLS = {
+    "qc": ["anndata-data-structure", "scanpy-scrna-seq", "bio-single-cell-preprocessing", "bio-single-cell-doublet-detection"],
+    "downstream": [
+        "scanpy-scrna-seq",
+        "harmony-batch-correction",
+        "scvi-tools-single-cell",
+        "single-cell-annotation-guide",
+        "single-cell-annotation",
+        "celltypist-cell-annotation",
+        "bio-single-cell-clustering",
+        "bio-single-cell-markers-annotation",
+    ],
+}
 
-    def add(*cands: str) -> None:
-        for c in cands:
-            if c in names and c not in selected:
-                selected.append(c)
+_PHASE_HINTS = {
+    "qc": ("qc", "preprocess", "anndata", "scanpy", "doublet", "data-io", "sparse", "normaliz", "io"),
+    "downstream": (
+        "cluster",
+        "annotat",
+        "harmony",
+        "scvi",
+        "marker",
+        "celltypist",
+        "popv",
+        "trajectory",
+        "spatial",
+        "cellchat",
+        "communication",
+        "perturb",
+        "atac",
+        "grn",
+        "scenic",
+        "velocity",
+        "lineage",
+        "azimuth",
+        "multimodal",
+        "cite",
+        "tcr",
+        "repertoire",
+        "deconv",
+    ),
+}
 
-    add("anndata-data-structure", "scanpy-scrna-seq")
-    tissue = str(metadata.get("tissue") or "").lower()
-    n_samples = int(metadata.get("n_samples") or 1)
-    need_batch = bool(metadata.get("need_batch_correction")) or n_samples > 1
-    integrator = metadata.get("integrator")
-    if need_batch or integrator:
-        if integrator == "scvi":
-            add("scvi-tools-single-cell", "harmony-batch-correction", "bio-single-cell-batch-integration")
-        else:
-            add("harmony-batch-correction", "scvi-tools-single-cell", "bio-single-cell-batch-integration")
-    add("single-cell-annotation-guide", "single-cell-annotation", "celltypist-cell-annotation")
-    add("bio-single-cell-markers-annotation", "bio-single-cell-cell-annotation")
-    if tissue in {"pbmc", "blood", "immune"} or metadata.get("use_popv"):
-        add("popv-cell-annotation")
-    if metadata.get("use_census") or "atlas" in str(metadata.get("task") or "").lower():
-        add("cellxgene-census", "bio-machine-learning-atlas-mapping")
-    task = _topic_query(metadata, metadata.get("user_query"))
-    if any(
-        k in task
-        for k in (
-            "cellchat",
-            "cell chat",
-            "cell-cell",
-            "cell communication",
-            "ligand-receptor",
-            "ligand receptor",
-            "细胞通讯",
-            "配体受体",
-            "配体-受体",
-        )
-    ):
-        add("cellchat-cell-communication", "bio-single-cell-cell-communication", "cell-communication")
-    if any(k in task for k in ("doublet", "scrublet", "doubletfinder", "双细胞")):
-        add("bio-single-cell-doublet-detection", "scrna-preprocessing-clustering")
-    if any(k in task for k in ("spatial", "visium", "squidpy", "giotto", "空间", "空转")):
-        add("spatial-transcriptomics", "spatial-data-io", "spatial-preprocessing")
-    if any(k in task for k in ("trajectory", "pseudotime", "monocle", "palantir", "velocity", "轨迹", "拟时序")):
-        add(
-            "trajectory-lineage",
-            "bio-single-cell-trajectory-inference",
-            "Single-Cell Trajectory Inference",
-            "rna-velocity-agent",
-        )
-    if any(k in task for k in ("scatac", "atac", "multiome", "signac")):
-        add("multiome-scatac", "bio-atac-seq-single-cell-atac")
-    if any(k in task for k in ("perturb", "crop-seq", "crispr screen")):
-        add("bio-single-cell-perturb-seq", "bio-crispr-screens-perturb-seq-analysis")
-    if any(k in task for k in ("scenic", "regulon", "grn")):
-        add("bio-gene-regulatory-networks-scenic-regulons")
-    if language != "python":
-        add("scanpy-scrna-seq")
-    return selected
+
+def skills_for_phase(phase: str, plan_skills: list[str] | None = None, *, max_extra: int = 6) -> list[str]:
+    """Core phase skills plus task-selected skills from the full catalog."""
+    available = {s.name for s in list_skills()}
+    wanted = [n for n in (PHASE_SKILLS.get(phase) or []) if n in available]
+    hints = _PHASE_HINTS.get(phase) or ()
+    extra: list[str] = []
+    for name in plan_skills or []:
+        if name in wanted or name in extra:
+            continue
+        low = name.lower()
+        if phase == "qc" and not any(h in low for h in hints):
+            continue
+        if phase == "downstream" and not any(h in low for h in hints):
+            continue
+        extra.append(name)
+        if len(extra) >= max_extra:
+            break
+    return wanted + extra
 
 
 # Keep a stable import for tests that want the repo root.

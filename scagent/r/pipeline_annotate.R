@@ -40,6 +40,22 @@ if (requireNamespace("Azimuth", quietly = TRUE)) {
   }, error = function(e) message("Azimuth skipped: ", conditionMessage(e)))
 }
 
+if (identical(annotation_method, "seurat_clusters") && requireNamespace("SingleR", quietly = TRUE)) {
+  tryCatch({
+    sce_ann <- Seurat::as.SingleCellExperiment(obj)
+    ref <- NULL
+    if (requireNamespace("celldex", quietly = TRUE)) {
+      ref <- celldex::HumanPrimaryCellAtlasData()
+    }
+    if (!is.null(ref)) {
+      pred <- SingleR::SingleR(test = sce_ann, ref = ref, labels = ref$label.main)
+      obj$scagent_annotation <- pred$labels
+      obj$scagent_annotation_conf <- apply(pred$scores, 1, max)
+      annotation_method <- "singler"
+    }
+  }, error = function(e) message("SingleR skipped: ", conditionMessage(e)))
+}
+
 sce_out <- Seurat::as.SingleCellExperiment(obj)
 zellkonverter::writeH5AD(sce_out, out)
 

@@ -1,0 +1,14 @@
+{
+  "source": "Gene Ontology (GO) compact evidence sets",
+  "url": "https://geneontology.org",
+  "note": "Small gene lists for cell-state evidence chains, not the full GO DAG.",
+  "sets": [
+    {"id": "GO:0002429", "name": "immune response-activating cell surface receptor signaling pathway", "genes": ["PDCD1", "HAVCR2", "LAG3", "TIGIT", "CTLA4", "CD274", "CD3D", "CD3E", "LCK", "ZAP70"]},
+    {"id": "GO:0042110", "name": "T cell activation", "genes": ["CD3D", "CD3E", "CD4", "CD8A", "IL7R", "LCK", "ZAP70", "IL2RA", "CD28"]},
+    {"id": "GO:0002250", "name": "adaptive immune response", "genes": ["MS4A1", "CD79A", "CD19", "IGHM", "CD3D", "CD8A", "HLA-DRA"]},
+    {"id": "GO:0006955", "name": "immune response", "genes": ["LYZ", "CD14", "HLA-DRA", "TNF", "IL1B", "CXCL8", "PTPRC"]},
+    {"id": "GO:0007399", "name": "nervous system development", "genes": ["RBFOX3", "SNAP25", "AQP4", "GFAP", "MBP", "SLC1A3", "SOX2"]},
+    {"id": "GO:0001889", "name": "liver development", "genes": ["ALB", "APOA1", "APOE", "TTR", "CYP3A4"]},
+    {"id": "GO:0007507", "name": "heart development", "genes": ["TNNT2", "MYH7", "ACTC1", "NPPA", "MYL2"]}
+  ]
+}

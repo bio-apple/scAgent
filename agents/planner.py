@@ -7,10 +7,11 @@ from agents.dependencies import resolve_route, serialize_dag
 from agents.intent import parse_intent
 from agents.markers import choose_celltypist_model
 from agents.roles import assign_roles
-from rag.retriever import format_hits, retrieve
+from rag.retriever import format_hits, retrieve_fused
 from scagent.config import analysis_params, load_config
 from scagent.deg_methods import force_pseudobulk_de, parse_deg_preference, resolve_forced_deg_engine
 from scagent.preprocess import choose_ambient
+from scagent.best_practices_loader import practices_catalog_text, practices_for_route
 from scagent.skills_loader import recommend_skills, skill_catalog_text
 from scagent.tool_router import analysis_language, build_tool_route
 
@@ -91,7 +92,6 @@ def build_plan(state: dict) -> dict:
     if req_l in {"none", "off", "skip"}:
         meta["skip_integration_reason"] = "user disabled batch module"
     integrator_reason = explain_integrator(meta, requested, integrator)
-    skills = [] if r_degraded else recommend_skills({**meta, "integrator": integrator}, language=language)
     imputation = "none" if r_degraded else (state.get("imputation") or (cfg.get("modules") or {}).get("imputation") or "none")
     ambient = "none" if r_degraded else choose_ambient(
         meta.get("tissue"), state.get("ambient") or (cfg.get("modules") or {}).get("ambient")
@@ -108,12 +108,6 @@ def build_plan(state: dict) -> dict:
     resolution = state.get("resolution")
     if resolution is None:
         resolution = analysis_params(cfg).get("leiden_resolution")
-    rag = format_hits(
-        retrieve(
-            f"{meta.get('platform')} {meta.get('tissue')} scRNA-seq best practices integration Harmony scVI",
-            collections=["papers", "best_practices", "methods", "sops"],
-        )
-    )
     if r_degraded:
         route = ["plan_only"]
     else:
@@ -133,6 +127,36 @@ def build_plan(state: dict) -> dict:
             ambient=ambient,
             r_degraded=False,
         )
+
+    skills = [] if r_degraded else recommend_skills(
+        {
+            **meta,
+            "integrator": integrator,
+            "user_query": state.get("user_query"),
+            "task": state.get("user_query"),
+            "intents": (intent or {}).get("intents") or [],
+            "route": route,
+        },
+        language=language,
+    )
+    best_practices = [] if r_degraded else practices_for_route(
+        route if not r_degraded else [],
+        (intent or {}).get("intents") or [],
+        state.get("user_query"),
+    )
+    rag = (
+        ""
+        if r_degraded
+        else format_hits(
+            retrieve_fused(
+                f"{state.get('user_query') or ''} {meta.get('platform')} {meta.get('tissue')} "
+                "scRNA-seq integration Harmony scVI",
+                route=route,
+                intents=list((intent or {}).get("intents") or []),
+                user_query=state.get("user_query"),
+            )
+        )
+    )
 
     pref = parse_deg_preference(state.get("user_query"))
     tool_route = build_tool_route(
@@ -176,6 +200,7 @@ def build_plan(state: dict) -> dict:
         "language": language,
         "r_degraded": r_degraded,
         "skills": skills,
+        "best_practices": best_practices,
         "route": route,
         "dag": serialize_dag(route, integrator=integrator),
         "loop": "plan-and-solve",
@@ -225,8 +250,10 @@ def build_plan(state: dict) -> dict:
                 f"用户任务: {state.get('user_query')}\n"
                 f"metadata: {json.dumps(meta, ensure_ascii=False)}\n"
                 f"integrator={integrator}\n"
-                f"可选 skills:\n{skill_catalog_text(metadata=meta, query=state.get('user_query'))}\n"
-                f"RAG:\n{rag}\n"
+                f"可选 skills（全部 bundled，* 为本次推荐）:\n{skill_catalog_text(metadata={**meta, 'integrator': integrator}, query=state.get('user_query'))}\n"
+                f"knowledge/best_practices:\n{practices_catalog_text()}\n"
+                f"本次选用 SOP: {', '.join(best_practices)}\n"
+                f"RAG（SOP + 文献融合）:\n{rag}\n"
                 "这是 Plan-and-Solve + 多智能体：Planner 只分工，QC / 聚类DEG / 解读 / 代码审计各司其职。"
                 "禁止在 PCA/neighbors/UMAP/Leiden 之前做 DE 或 DPT/Monocle3。"
                 "请输出分析路线。"

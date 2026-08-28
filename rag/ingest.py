@@ -9,6 +9,30 @@ from scagent.config import REPO_ROOT, load_config, resolve_path
 
 _TOKEN_RE = re.compile(r"[a-z0-9_]+|[\u4e00-\u9fff]", re.I)
 
+SKIP_DIR_NAMES = {
+    "_build",
+    "figures",
+    "datasets",
+    ".git",
+    "__pycache__",
+    ".ipynb_checkpoints",
+    "node_modules",
+    ".github",
+    "changelog.d",
+    "scripts",
+    "template",
+    "dropdowns",
+}
+SKIP_FILE_NAMES = {
+    ".DS_Store",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "LICENSE.md",
+    "LICENSE",
+}
+
 
 def tokenize(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text or "")]
@@ -152,14 +176,13 @@ def _iter_source_files(collection_dir: Path) -> Iterable[Path]:
     if not collection_dir.exists():
         return []
     files: list[Path] = []
-    for ext in ("*.md", "*.txt", "*.pdf", "*.ipynb"):
+    for ext in ("*.md", "*.txt", "*.pdf", "*.ipynb", "*.json"):
         files.extend(collection_dir.rglob(ext))
-    skip_dirs = {"_build", "figures", "datasets", ".git", "__pycache__", ".ipynb_checkpoints"}
     out: list[Path] = []
     for p in files:
-        if not p.is_file() or p.name in {".DS_Store", "README.md"}:
+        if not p.is_file() or p.name in SKIP_FILE_NAMES:
             continue
-        if any(part in skip_dirs for part in p.parts):
+        if any(part in SKIP_DIR_NAMES for part in p.parts):
             continue
         out.append(p)
     return out
@@ -208,21 +231,36 @@ def ingest(cfg: dict | None = None, *, force: bool = False) -> Path:
             if path.name == "README.md":
                 continue
             if path.suffix.lower() == ".pdf":
-                text = _read_pdf(path)
+                units = [_read_pdf(path)]
             elif path.suffix.lower() == ".ipynb":
-                text = _read_ipynb(path)
+                units = [_read_ipynb(path)]
+            elif path.suffix.lower() == ".json":
+                from scagent.kb import flatten_json_texts
+
+                units = flatten_json_texts(path, collection=collection) or [
+                    path.read_text(encoding="utf-8", errors="replace")
+                ]
             else:
-                text = path.read_text(encoding="utf-8", errors="replace")
+                units = [path.read_text(encoding="utf-8", errors="replace")]
             try:
                 rel = str(path.relative_to(root))
             except ValueError:
                 rel = str(path.relative_to(knowledge))
-            for i, chunk in enumerate(chunk_document(text, chunk_size, overlap, mode=chunk_mode)):
+            chunks: list[str] = []
+            for unit in units:
+                if path.suffix.lower() == ".json":
+                    chunks.append(unit)
+                else:
+                    chunks.extend(chunk_document(unit, chunk_size, overlap, mode=chunk_mode))
+            for i, chunk in enumerate(chunks):
+                if not chunk or not str(chunk).strip():
+                    continue
                 records.append(
                     {
                         "id": f"{rel}::{i}",
                         "collection": collection,
                         "source": rel,
+                        "stem": path.stem,
                         "chunk_index": i,
                         "text": chunk,
                     }

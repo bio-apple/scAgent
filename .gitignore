@@ -18,6 +18,7 @@ outputs/*
 knowledge/.index/
 .cache/
 best_practices/upstream/
+knowledge/upstream/
 knowledge/sops/**
 !knowledge/sops/README.md
 *.h5ad

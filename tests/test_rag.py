@@ -1,5 +1,5 @@
 from rag.ingest import chunk_semantic, ingest
-from rag.retriever import clear_retrieve_cache, retrieve
+from rag.retriever import clear_retrieve_cache, retrieve, retrieve_fused
 from rag.synonyms import expand_query
 
 
@@ -20,7 +20,7 @@ def test_rag_papers_harmony():
 def test_rag_best_practices_qc():
     _refresh()
     hits = retrieve("MAD-based filtering per sample mitochondrial", collection="best_practices", top_k=5)
-    assert hits, "expected BM25 hits from best_practices/reference"
+    assert hits, "expected BM25 hits from knowledge/best_practices"
     blob = " ".join(h["source"] + " " + h["text"] for h in hits).lower()
     assert "mad" in blob
     assert "qc.md" in blob or "quality control" in blob
@@ -44,6 +44,29 @@ def test_hybrid_chinese_batch_hits_harmony():
     blob = " ".join(h["source"] + " " + h["text"] for h in hits).lower()
     assert "harmony" in blob or "batch" in blob or "korsunsky" in blob
     assert hits[0].get("retrieval") == "hybrid"
+
+
+def test_fused_retrieve_boosts_qc_sop():
+    _refresh()
+    hits = retrieve_fused("mitochondrial QC MAD", phase="qc", top_k=6)
+    assert hits
+    blob = " ".join(f"{h.get('collection')} {h.get('source')} {h.get('stem')}" for h in hits).lower()
+    assert "best_practices" in blob
+    assert "qc.md" in blob or "qc" in blob
+
+
+def test_multi_collection_fused_pass():
+    _refresh()
+    hits = retrieve(
+        "MAD mitochondrial filtering",
+        collections=["best_practices", "papers", "methods"],
+        boost_stems=["qc"],
+        top_k=6,
+    )
+    assert hits
+    assert any(
+        h.get("collection") in {"best_practices", "methods", "papers"} for h in hits
+    )
 
 
 def test_semantic_chunk_keeps_paragraphs():

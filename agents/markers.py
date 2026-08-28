@@ -6,7 +6,8 @@ from pathlib import Path
 
 from scagent.config import REPO_ROOT
 
-DEFAULT_CATALOG = REPO_ROOT / "knowledge" / "markers" / "catalog.json"
+DEFAULT_CATALOG = REPO_ROOT / "knowledge" / "marker_db" / "catalog.json"
+LEGACY_CATALOG = REPO_ROOT / "knowledge" / "markers" / "catalog.json"
 IMMUNE_TISSUES = {"pbmc", "blood", "immune"}
 
 # Official CellTypist filenames (celltypist.org / models_description). Organ atlas names for heart/liver.
@@ -62,11 +63,12 @@ def _normalize_entry(row: dict) -> dict:
         "level": len(lin),
         "positive": pos,
         "negative": neg,
+        **{k: row[k] for k in ("cl_id", "source") if row.get(k)},
     }
 
 
 def load_marker_catalog(path: str | Path | None = None, tissue: str | None = None) -> dict:
-    catalog_path = Path(path) if path else DEFAULT_CATALOG
+    catalog_path = Path(path) if path else (DEFAULT_CATALOG if DEFAULT_CATALOG.exists() else LEGACY_CATALOG)
     if catalog_path.suffix.lower() in {".csv", ".tsv"}:
         types = [_normalize_entry(r) for r in _from_table(catalog_path)]
         return {"tissue": tissue or "custom", "cell_types": types}

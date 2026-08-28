@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 
 from agents.common import read_prompt, run_specialist
-from rag.retriever import format_hits, retrieve
+from rag.retriever import format_hits, retrieve_fused
+from scagent.best_practices_loader import practices_for_phase
 from scagent.config import load_config
 from scagent.doublets import resolve_doublet_methods
 from scagent.preprocess import choose_ambient
@@ -35,11 +36,13 @@ def build_qc_strategy(state: dict) -> dict:
     if state.get("qc_method"):
         qc_cfg["method"] = state["qc_method"]
     rag = format_hits(
-        retrieve(
+        retrieve_fused(
             f"{tissue} mitochondrial QC MAD percentile violin scatter",
-            collections=["papers", "best_practices", "sops"],
+            phase="qc",
+            user_query=state.get("user_query"),
         )
     )
+    bp = practices_for_phase("qc", query=state.get("user_query"))
     nmads = int(prof.get("nmads") or (6 if tissue in {"heart", "tumor", "kidney"} else 5))
     method = str(qc_cfg.get("method") or "mad")
     modules = cfg.get("modules") or {}
@@ -84,6 +87,7 @@ def build_qc_strategy(state: dict) -> dict:
         "imputation": imputation,
         "hitl_choice": state.get("qc_choice"),
         "rag_excerpt": rag,
+        "best_practices": bp,
         "protocol": (
             f"QC method={method}（组织={tissue}）。禁止默认 mito%<5 / nFeature>200。\n"
             "1. calculate_qc_metrics(log1p=True) + Violin/Scatter\n"

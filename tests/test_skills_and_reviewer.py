@@ -40,8 +40,12 @@ def test_awesome_single_cell_skills_imported():
     manifest = awesome_manifest()
     assert manifest is not None
     assert manifest["total_indexed"] == 144
-    assert manifest["imported"] >= 120
-    assert len(list_skills()) >= 140
+    names = {s.name for s in list_skills()}
+    assert len(names) >= 90
+    assert "scanpy" not in names
+    assert "bioskills" not in names
+    assert "bio-methylation-dmr-detection" not in names
+    assert "bio-spatial-transcriptomics-spatial-deconvolution" in names
 
 
 def test_recommend_spatial_skills():
@@ -49,10 +53,28 @@ def test_recommend_spatial_skills():
     assert "spatial-transcriptomics" in skills
 
 
-def test_skill_catalog_is_bounded():
-    text = skill_catalog_text(metadata={"task": "PBMC QC clustering"}, query="标准 PBMC 分析", limit=48)
-    assert text.count("- ") <= 48
-    assert "另有" in text or len(list_skills()) <= 48
+def test_recommend_indexes_all_bundled_skills():
+    skills = recommend_skills({"task": "pySCENIC regulon GRN from scRNA-seq"})
+    assert any("scenic" in s.lower() or "grn" in s.lower() for s in skills)
+    atac = recommend_skills({"task": "10x multiome scATAC Signac ArchR"})
+    assert any("atac" in s.lower() or "multiome" in s.lower() for s in atac)
+
+
+def test_skill_catalog_lists_all_skills():
+    text = skill_catalog_text()
+    names = {s.name for s in list_skills()}
+    missing = [n for n in names if n not in text]
+    assert len(missing) <= 3, missing
+    assert "bundled skills:" in text
+
+
+def test_skills_for_phase_includes_plan_skills():
+    from scagent.skills_loader import skills_for_phase
+
+    names = skills_for_phase("downstream", ["cellchat-cell-communication", "spatial-transcriptomics", "scanpy-scrna-seq"])
+    assert "cellchat-cell-communication" in names
+    assert "spatial-transcriptomics" in names
+    assert "scanpy-scrna-seq" in names
 
 
 def test_choose_integrator():

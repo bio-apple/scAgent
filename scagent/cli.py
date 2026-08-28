@@ -5,7 +5,7 @@ import json
 import sys
 
 from rag.ingest import ingest
-from rag.retriever import clear_retrieve_cache, format_hits, retrieve
+from rag.retriever import clear_retrieve_cache, format_hits, retrieve, retrieve_fused
 from scagent.config import load_config
 from scagent.skills_loader import list_skills, load_skill_text
 
@@ -52,8 +52,13 @@ def cmd_add_doc(args: argparse.Namespace) -> int:
 
 
 def cmd_retrieve(args: argparse.Namespace) -> int:
-    cols = args.collections.split(",") if args.collections else None
-    hits = retrieve(args.query, collection=args.collection, top_k=args.top_k, collections=cols)
+    cols = [c.strip() for c in args.collections.split(",") if c.strip()] if args.collections else None
+    if cols:
+        hits = retrieve(args.query, collections=cols, top_k=args.top_k)
+    elif args.collection:
+        hits = retrieve(args.query, collection=args.collection, top_k=args.top_k)
+    else:
+        hits = retrieve_fused(args.query, top_k=args.top_k)
     print(format_hits(hits))
     return 0
 
@@ -432,7 +437,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-write-config", action="store_true", help="Do not write config.local.yaml")
     s.set_defaults(func=cmd_init)
 
-    s = sub.add_parser("ingest", help="Index knowledge/papers, methods, markers, best_practices, knowledge/sops")
+    s = sub.add_parser("ingest", help="Index knowledge/ (papers, methods, markers, best_practices, sops, upstream)")
     s.set_defaults(func=cmd_ingest)
 
     s = sub.add_parser(
@@ -458,7 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("retrieve", help="Query RAG collections")
     s.add_argument("query")
-    s.add_argument("--collection", default="papers")
+    s.add_argument("--collection", default=None, help="Single collection (default: fused across knowledge/)")
     s.add_argument("--collections", default=None, help="Comma-separated, e.g. papers,markers,best_practices")
     s.add_argument("--top-k", type=int, default=None, help="Number of chunks to return")
     s.set_defaults(func=cmd_retrieve)

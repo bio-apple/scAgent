@@ -5,7 +5,9 @@ import json
 from agents.common import read_prompt, run_specialist
 from agents.markers import choose_celltypist_model, load_marker_catalog
 from agents.templates import cluster_annotate_script
-from rag.retriever import format_hits, retrieve
+from rag.retriever import format_hits, retrieve_fused
+from scagent.best_practices_loader import practices_for_phase
+from scagent.kb import format_records, lookup_structured
 
 
 def build_annotation_plan(state: dict) -> dict:
@@ -18,13 +20,26 @@ def build_annotation_plan(state: dict) -> dict:
     if state.get("resolution") is not None:
         plan_in["resolution"] = state["resolution"]
     plan_in.setdefault("celltypist_model", ct_model)
+    tissue = str(meta.get("tissue") or "pbmc")
     rag = format_hits(
-        retrieve(
-            "CellTypist marker dual validation annotation",
-            collections=["papers", "best_practices", "sops"],
+        retrieve_fused(
+            f"{tissue} CellTypist marker dual validation annotation",
+            phase="annotation",
+            route=list(plan_in.get("route") or []),
+            user_query=state.get("user_query"),
+            tissue=tissue,
+            include_markers=True,
         )
     )
-    markers = format_hits(retrieve(str(meta.get("tissue") or "immune"), collection="markers"))
+    bp = practices_for_phase("annotation", route=list(plan_in.get("route") or []), query=state.get("user_query"))
+    markers = format_records(
+        lookup_structured(
+            f"{tissue} cell type markers ontology",
+            collections=["marker_db", "cell_ontology", "tissue_reference"],
+            tissue=tissue,
+            top_k=8,
+        )
+    )
     code = cluster_annotate_script(meta, state.get("qc_strategy") or {}, plan_in)
     plan = {
         "tiers": [
@@ -41,6 +56,7 @@ def build_annotation_plan(state: dict) -> dict:
         "catalog_tissue": catalog.get("tissue"),
         "n_cell_types": len(catalog.get("cell_types") or []),
         "rag_excerpt": rag,
+        "best_practices": bp,
         "marker_excerpt": markers,
         "code": code,
         "instructions": (

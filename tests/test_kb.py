@@ -83,8 +83,8 @@ def test_update_kb_syncs_local_book_without_network(tmp_path):
     (chapter / "quality_control.md").write_text(
         "# Quality control\nUse MAD-based filtering per sample.\n", encoding="utf-8"
     )
-    dest = tmp_path / "best_practices" / "upstream"
-    cfg = _cfg(tmp_path, ["best_practices"], {"best_practices": str(tmp_path / "best_practices")})
+    dest = tmp_path / "knowledge" / "upstream"
+    cfg = _cfg(tmp_path, ["upstream"], {"upstream": str(dest)})
     info = update_kb(repo_dir=repo, dest=dest, cfg=cfg, fetch=False, reindex=True)
     assert info["n_files"] >= 1
     assert (dest / "preprocessing_visualization" / "quality_control.md").is_file()
@@ -109,4 +109,7 @@ def test_config_includes_sops_collection():
 
     cfg = load_config()
     assert "sops" in (cfg.get("rag") or {}).get("collections")
-    assert (cfg.get("rag") or {}).get("collection_dirs", {}).get("best_practices") == "best_practices"
+    assert "marker_db" in (cfg.get("rag") or {}).get("collections")
+    assert "cell_ontology" in (cfg.get("rag") or {}).get("collections")
+    assert "upstream" in (cfg.get("rag") or {}).get("collections")
+    assert (cfg.get("rag") or {}).get("default_collection") == "fused"

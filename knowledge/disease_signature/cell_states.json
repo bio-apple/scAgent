@@ -1,0 +1,86 @@
+{
+  "source": "literature-backed cell-state signatures",
+  "note": "Each state requires ≥2 markers + GO/pathway + PMID/DOI. Used by scagent.evidence.",
+  "states": [
+    {
+      "name": "CD8 Tex",
+      "aliases": ["cd8 tex", "tex", "exhausted t", "exhausted t cell", "t cell exhaustion", "cd8 exhausted"],
+      "markers": ["PDCD1", "HAVCR2", "LAG3", "TOX"],
+      "pathways": [{"id": "GO:0002429", "name": "immune response-activating cell surface receptor signaling pathway"}],
+      "citations": [
+        {"pmid": "21739672", "doi": "10.1038/nri3156", "title": "T cell exhaustion", "year": 2011, "journal": "Nat Rev Immunol"},
+        {"pmid": "20837752", "doi": "10.1084/jem.20100643", "title": "Targeting Tim-3 and PD-1 pathways to reverse T cell exhaustion", "year": 2010, "journal": "J Exp Med"}
+      ]
+    },
+    {
+      "name": "CD8 T",
+      "aliases": ["cd8 t", "cd8 t cell", "cytotoxic t"],
+      "markers": ["CD8A", "CD8B", "CD3D"],
+      "pathways": [{"id": "GO:0042110", "name": "T cell activation"}],
+      "citations": [{"pmid": "35549406", "doi": "10.1126/science.abl5197", "title": "Cross-tissue immune cell analysis reveals tissue-specific features in humans", "year": 2022, "journal": "Science"}]
+    },
+    {
+      "name": "CD4 T",
+      "aliases": ["cd4 t", "cd4 t cell", "helper t"],
+      "markers": ["CD4", "IL7R", "CD3E"],
+      "pathways": [{"id": "GO:0042110", "name": "T cell activation"}],
+      "citations": [{"pmid": "35549406", "doi": "10.1126/science.abl5197", "title": "Cross-tissue immune cell analysis reveals tissue-specific features in humans", "year": 2022, "journal": "Science"}]
+    },
+    {
+      "name": "T cell",
+      "aliases": ["t cell", "t cells"],
+      "markers": ["CD3D", "CD3E"],
+      "pathways": [{"id": "GO:0042110", "name": "T cell activation"}],
+      "citations": [{"pmid": "35549406", "doi": "10.1126/science.abl5197", "title": "Cross-tissue immune cell analysis reveals tissue-specific features in humans", "year": 2022, "journal": "Science"}]
+    },
+    {
+      "name": "NK",
+      "aliases": ["nk", "nk cell", "natural killer"],
+      "markers": ["NKG7", "GNLY"],
+      "pathways": [{"id": "GO:0002429", "name": "immune response-activating cell surface receptor signaling pathway"}],
+      "citations": [{"pmid": "35549406", "doi": "10.1126/science.abl5197", "title": "Cross-tissue immune cell analysis reveals tissue-specific features in humans", "year": 2022, "journal": "Science"}]
+    },
+    {
+      "name": "B cell",
+      "aliases": ["b cell", "b cells"],
+      "markers": ["MS4A1", "CD79A"],
+      "pathways": [{"id": "GO:0002250", "name": "adaptive immune response"}],
+      "citations": [{"pmid": "35549406", "doi": "10.1126/science.abl5197", "title": "Cross-tissue immune cell analysis reveals tissue-specific features in humans", "year": 2022, "journal": "Science"}]
+    },
+    {
+      "name": "CD14 monocyte",
+      "aliases": ["cd14 monocyte", "classical monocyte", "monocyte"],
+      "markers": ["CD14", "LYZ"],
+      "pathways": [{"id": "GO:0006955", "name": "immune response"}],
+      "citations": [{"pmid": "35549406", "doi": "10.1126/science.abl5197", "title": "Cross-tissue immune cell analysis reveals tissue-specific features in humans", "year": 2022, "journal": "Science"}]
+    },
+    {
+      "name": "Neuron",
+      "aliases": ["neuron", "neuronal"],
+      "markers": ["RBFOX3", "SNAP25"],
+      "pathways": [{"id": "GO:0007399", "name": "nervous system development"}],
+      "citations": [{"pmid": "25700174", "doi": "10.1126/science.aaa1934", "title": "Cell types in the mouse cortex and hippocampus revealed by single-cell RNA-seq", "year": 2015, "journal": "Science"}]
+    },
+    {
+      "name": "Astrocyte",
+      "aliases": ["astrocyte", "astroglia"],
+      "markers": ["AQP4", "GFAP"],
+      "pathways": [{"id": "GO:0007399", "name": "nervous system development"}],
+      "citations": [{"pmid": "25700174", "doi": "10.1126/science.aaa1934", "title": "Cell types in the mouse cortex and hippocampus revealed by single-cell RNA-seq", "year": 2015, "journal": "Science"}]
+    },
+    {
+      "name": "Hepatocyte",
+      "aliases": ["hepatocyte", "liver parenchyma"],
+      "markers": ["ALB", "APOA1"],
+      "pathways": [{"id": "GO:0001889", "name": "liver development"}],
+      "citations": [{"pmid": "31270459", "doi": "10.1038/s41586-019-1373-2", "title": "A human liver cell atlas reveals heterogeneity and epithelial progenitors", "year": 2019, "journal": "Nature"}]
+    },
+    {
+      "name": "Cardiomyocyte",
+      "aliases": ["cardiomyocyte", "cardiac muscle"],
+      "markers": ["TNNT2", "MYH7"],
+      "pathways": [{"id": "GO:0007507", "name": "heart development"}],
+      "citations": [{"pmid": "32971526", "doi": "10.1038/s41586-020-2797-4", "title": "Cells of the adult human heart", "year": 2020, "journal": "Nature"}]
+    }
+  ]
+}

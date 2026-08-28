@@ -4,7 +4,7 @@
 
 LangGraph-based agent for single-cell bioinformatics. Compared with CellAgent or generic SciAgent-Skills, scAgent enforces **tissue-aware QC, execution review, and auditable scripts**—not just tutorial code generation.
 
-Existing SciAgent-style skills are **preserved as-is**. RAG indexes `knowledge/papers` by default, plus `best_practices/` (step summaries in `reference/` and sc-best-practices fetched via `update-kb`) and `knowledge/sops/` (lab SOPs).
+Existing SciAgent-style skills are **preserved as-is**. `knowledge/` holds fused RAG plus a structured KB (offline subsets of Cell Ontology, CellMarker/PanglaoDB, MSigDB, disease signatures, HCA tissue maps). Annotation and interpretation retrieve JSON records, not prompt prose.
 
 ## Quick Start
 
@@ -165,8 +165,8 @@ The pipeline is **Planner (orchestration only) → four specialist agents (strat
 | Agent | Responsibility | Typical outputs |
 |-------|----------------|-----------------|
 | QC & Preprocessing | Validation, MAD/doublets/ambient, HVG, PCA | `qc_strategy`, LOCKED QC blocks |
-| Clustering & Differential | Leiden, CellTypist+scANVI/Azimuth, dual marker validation, pseudobulk DEG | `annotation_plan`, `cluster_annotate.py` |
-| Biological Interpretation | Pathway enrichment (GSEA/GSVA/ORA) + local RAG | `interpretation_plan` |
+| Clustering & Differential | Leiden, CellTypist+scANVI/Azimuth, **structured marker_db + CL**, dual validation, pseudobulk DEG | `annotation_plan`, `cluster_annotate.py` |
+| Biological Interpretation | Pathway enrichment (GSEA/GSVA/ORA) + **fused RAG** + MSigDB/disease-signature JSON | `interpretation_plan` |
 | Code Audit & Execution | Strategy → executable code, schema/DAG guardrails, Rscript/Jupyter, self-repair | `workspace/*.py`, `run_manifest.json` |
 
 Phase Reviewers check both **code** and **execution** (metrics, `SCAGENT_WARN`). The publication Reviewer aggregates QC / markers / DEG / plots / batch correction. Writer uses **only** `artifacts`; without `--execute`, the report states figures were not generated.
@@ -328,7 +328,7 @@ Override with `--integrator harmony|scvi|cca|scanorama|bbknn`. BBKNN modifies th
 | `--annotate-only` | Skip QC; requires existing `adata_qc.h5ad` |
 | `--interrupt` | Pause at mitochondrial threshold and Leiden resolution; review `outputs/decisions/*.html` then `scagent confirm` |
 | `--resolution` | Fixed Leiden resolution (skip resolution confirmation) |
-| `scagent update-kb` | Fetch latest sc-best-practices into `best_practices/upstream/` and rebuild index |
+| `scagent update-kb` | Fetch latest sc-best-practices into `knowledge/upstream/` and rebuild index |
 | `scagent add-doc <path>` | Copy lab SOP (md/txt/pdf/ipynb) to `knowledge/sops/` and index for RAG |
 | `scagent confirm mt\|resolution <choice>` | Continue after wet-lab preset selection |
 | `--batch-key` | Batch column name in obs |
@@ -341,7 +341,8 @@ Override with `--integrator harmony|scvi|cca|scanorama|bbknn`. BBKNN modifies th
 python -m scagent update-kb
 python -m scagent add-doc ./lab_qc_sop.md
 python -m scagent retrieve "Harmony versus scVI"
-python -m scagent retrieve "B cell MS4A1" --collections papers,markers
+python -m scagent retrieve "B cell MS4A1" --collections papers,marker_db,cell_ontology
+python -m scagent retrieve "CL:0000084 T cell"
 python -m scagent retrieve "pseudobulk FDR" --collections best_practices,papers
 python -m scagent memory
 python -m scagent view --serve
@@ -370,19 +371,19 @@ python -m scagent skills
 | `--gpu` | Enable GPU for scVI when CUDA is available |
 | `--rapids` | RAPIDS neighbors/UMAP via rapids-singlecell (implies GPU) |
 
-Place PDFs in `knowledge/papers/` then run `ingest`. `scagent update-kb` pulls from [theislab/single-cell-best-practices](https://github.com/theislab/single-cell-best-practices). Lab SOPs: `scagent add-doc <path>` → `knowledge/sops/`. Step summaries remain in `best_practices/reference/`. Custom marker CSV columns: `cell_type,positive,negative,lineage` (`;`-separated genes).
+Place PDFs in `knowledge/papers/` then run `ingest`. `scagent update-kb` pulls from [theislab/single-cell-best-practices](https://github.com/theislab/single-cell-best-practices) into `knowledge/upstream/`. Lab SOPs: `scagent add-doc <path>` → `knowledge/sops/`. Step SOPs live in `knowledge/best_practices/` and are fused with literature at retrieve time. Custom marker CSV columns: `cell_type,positive,negative,lineage` (`;`-separated genes).
 
-## Tool Router (R-first)
+## Tool Router (R first, Python backup only)
 
-Aligned with SciAgent routing: **Always use R ecosystem first. Only invoke Python when R lacks the required functionality.**
+Language is **hardcoded** in `scagent.tool_router`. The LLM must not pick R vs Python. If R can do it → R; else Python.
 
-| Function | R default | Python fallback |
-|----------|-----------|-----------------|
-| QC / Normalize | Seurat | Scanpy |
-| Integration | Harmony (R) | harmonypy / scVI / Scanorama |
-| Annotation | Azimuth | CellTypist + scANVI → `scagent_annotation` |
-| Trajectory | Monocle3 | DPT / PAGA / Palantir / scVelo |
-| CellChat | CellChat (R) | — |
+| Function | Preferred (R) | Backup (Python) |
+|----------|---------------|-----------------|
+| QC | Seurat | Scanpy |
+| Clustering | Seurat | Scanpy |
+| Batch correction | Harmony | scVI |
+| Annotation | Azimuth / SingleR | CellTypist |
+| Communication | CellChat | Squidpy |
 | Spatial | Giotto | Squidpy |
 
 Configure in `config.yaml` → `tool_router` + `analysis.language`:
@@ -395,7 +396,7 @@ Force Python: `SCAGENT_FORCE_PYTHON=1 python -m scagent run …`
 
 ## Design choices
 
-- **Skills**: Not split into `skills/R` vs `skills/python`. Fingerprint stored in `run_manifest.json`. **142** bundled single-cell skills: 10 SciAgent core skills preserved, plus **144** entries from [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) `bioskill_index_v3.csv` (132 new after dedup; see `skills/awesome_single_cell_manifest.json`). Planner recommends a task-relevant subset; `python -m scagent skills` lists all.
+- **Skills**: Not split into `skills/R` vs `skills/python`. Fingerprint stored in `run_manifest.json`. **99** bundled single-cell skills: 10 SciAgent core skills preserved, plus a de-duplicated subset of the 144 [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) single-cell index entries (core clones, catalog indexes, and mis-tagged bulk/flow/ChIP skills removed). See `skills/awesome_single_cell_manifest.json`; re-sync/prune with `scripts/sync_awesome_single_cell_skills.py`. Planner auto-retrieves from the full catalog and writes up to 24 task-relevant skills into `plan.skills`. `python -m scagent skills` lists all.
 - **Version compatibility**: `run_manifest.json` records `scagent_version`. `--resume` compares major (reject) / minor (warn); `--force-resume` overrides major mismatch. Old manifests without version warn then continue.
 - **Integration**: Optional module. inspect scans batch columns or treats multiple `--data` paths as samples. ≥2 batches and non-1:1 sample–condition collinearity → **auto correction**. Default Harmony; ≥100k cells or ≥8 samples → scVI. `--integrator none` disables. Sample–condition 1:1 collinear → skip to avoid removing treatment signal. Report includes rationale, batch PCA/UMAP, iLISI/kBET/PCA-R²; **UMAP mixing ≠ integration success**.
 - **HVG**: Default `flavor=seurat_v3` on `layers['counts']`, union across batches (Heumos 2023). Falls back to `seurat` without counts. PCA `use_highly_variable=True`. Exploratory Wilcoxon forces `use_raw`, not scaled `X`.
@@ -406,7 +407,7 @@ Force Python: `SCAGENT_FORCE_PYTHON=1 python -m scagent run …`
 - **DE**: Exploratory cluster markers default Wilcoxon; task may request **t-test / MAST / DESeq2 / edgeR**. Group comparisons aggregate raw counts at sample × cell type (edgeR QL / DESeq2 / t-test+BH)—**not** cell-level Wilcoxon/MAST as conclusions. Second-test cross-validation by default (overlap/Jaccard in metrics). Override via `--deg-engine` / `--marker-method` / `--deg-cross-validate` or `config.deg.*`. MAST requires R; skipped if missing.
 - **Integration metrics**: Prefer scIB iLISI/kBET; else kNN-iLISI and PCA batch R²—not cluster batch proportions alone. Reviewer embeds before/after batch PCA/UMAP in the publication report.
 - **Imputation**: Optional MAGIC / ALRA; does not alter DE `X`.
-- **RAG**: BM25 + vector recall + rerank; bilingual synonym expansion (batch correction → Harmony). Chunked by section/paragraph. Re-ingest after `update-kb` / `add-doc`. Optional vectors: `pip install -e '.[rag]'` (sentence-transformers); stable hashing fallback otherwise.
+- **RAG / knowledge base**: Corpus under `knowledge/`. **Fused retrieval** (default `scagent retrieve`): BM25 + vectors + RRF across `papers` / `best_practices` / `methods` / `sops` / `upstream`; SOPs boosted by analysis route. **Structured KB** (JSON records, not prompt prose): `cell_ontology` (CL), `marker_db` (CellMarker/PanglaoDB), `pathway` (MSigDB/GO subset), `disease_signature` (≥2 markers + DOI), `tissue_reference` (HCA). Annotation/interpretation agents and `lookup_knowledge` use `scagent.kb.lookup_structured`. See [`knowledge/README.md`](knowledge/README.md). Re-`ingest` after `update-kb` / `add-doc`. Optional vectors: `pip install -e '.[rag]'`; hashing fallback otherwise.
 - **Checkpoint**: LangGraph SQLite stores AgentState paths/params only—**never AnnData in state**. h5ad snapshots in `.cache/snapshots/<thread>/`: hardlink when possible; obs-only delta when `X` unchanged. `scagent snapshots` / `scagent branch --from-thread … --as …` for parameter forks.
 - **Reproducible export**: Each phase writes **[conclusion] + [code]** (`outputs/dual.md`). Python path: `outputs/analysis.ipynb` (markdown conclusion + clean Scanpy cells; Squidpy only for spatial). `--execute` runs **Jupyter** (nbclient/ipykernel) in `workspace/`—no seatbelt/bwrap (allows figure writes); static policy + DAG schema still block unsafe calls. `--language r` → dual `analysis.Rmd`; no R kernel in scAgent.
 - **Interactive viewer**: `outputs/viewer.html` Plotly.js UMAP/violin with box/lasso select. `scagent view --serve` for live Q&A; or export `selection.json` + `scagent ask --selection …`. Static PNGs remain for papers.
@@ -454,4 +455,4 @@ pytest -q
 
 With scanpy/anndata installed, small synthetic h5ad QC execution tests run. CI: GitHub Actions (pytest + flake8 + black).
 
-Skills reference: original [SciAgent-Skills single-cell](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell) (10 core skills preserved); plus the full **Single-Cell Analysis** category from [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) (144 index entries → 142 directories; re-sync via `scripts/sync_awesome_single_cell_skills.py`). Legacy [`single-cell-annotation`](https://github.com/jaechang-hits/SciAgent-Skills/blob/main/legacy/single-cell-annotation/SKILL.md) and [`cellchat-cell-communication`](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/systems-biology-multiomics/cellchat-cell-communication) remain under `skills/`.
+Skills reference: original [SciAgent-Skills single-cell](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell) (10 core skills preserved); plus a de-duplicated **Single-Cell Analysis** subset from [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) (144 index entries → 99 directories; re-sync/prune via `scripts/sync_awesome_single_cell_skills.py`). Legacy [`single-cell-annotation`](https://github.com/jaechang-hits/SciAgent-Skills/blob/main/legacy/single-cell-annotation/SKILL.md) and [`cellchat-cell-communication`](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/systems-biology-multiomics/cellchat-cell-communication) remain under `skills/`.

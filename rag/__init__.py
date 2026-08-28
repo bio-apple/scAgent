@@ -1,1 +1,1 @@
-"""RAG over knowledge/papers (and methods/markers)."""
+"""RAG over knowledge/ (papers, methods, markers, best_practices, sops, upstream)."""

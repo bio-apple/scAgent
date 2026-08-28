@@ -1,0 +1,30 @@
+{
+  "source": "Cell Ontology (CL)",
+  "url": "https://obofoundry.org/ontology/cl.html",
+  "note": "Curated subset for scRNA-seq annotation. Not the full ontology.",
+  "records": [
+    {"id": "CL:0000542", "name": "lymphocyte", "synonyms": ["lymphoid cell"], "tissues": ["pbmc", "immune"], "parent": "CL:0000738", "markers": ["PTPRC"]},
+    {"id": "CL:0000084", "name": "T cell", "synonyms": ["T lymphocyte"], "tissues": ["pbmc", "immune"], "parent": "CL:0000542", "markers": ["CD3D", "CD3E"]},
+    {"id": "CL:0000624", "name": "CD4-positive, alpha-beta T cell", "synonyms": ["CD4 T", "helper T"], "tissues": ["pbmc", "immune"], "parent": "CL:0000084", "markers": ["CD4", "IL7R", "CD3E"]},
+    {"id": "CL:0000625", "name": "CD8-positive, alpha-beta T cell", "synonyms": ["CD8 T", "cytotoxic T"], "tissues": ["pbmc", "immune"], "parent": "CL:0000084", "markers": ["CD8A", "CD8B", "CD3D"]},
+    {"id": "CL:0000236", "name": "B cell", "synonyms": ["B lymphocyte"], "tissues": ["pbmc", "immune"], "parent": "CL:0000542", "markers": ["MS4A1", "CD79A"]},
+    {"id": "CL:0000623", "name": "natural killer cell", "synonyms": ["NK", "NK cell"], "tissues": ["pbmc", "immune"], "parent": "CL:0000542", "markers": ["NKG7", "GNLY"]},
+    {"id": "CL:0000576", "name": "monocyte", "synonyms": ["CD14 monocyte", "classical monocyte"], "tissues": ["pbmc", "immune"], "parent": "CL:0000738", "markers": ["CD14", "LYZ"]},
+    {"id": "CL:0002396", "name": "CD16-positive monocyte", "synonyms": ["CD16 monocyte", "nonclassical monocyte"], "tissues": ["pbmc", "immune"], "parent": "CL:0000576", "markers": ["FCGR3A", "MS4A7"]},
+    {"id": "CL:0000451", "name": "dendritic cell", "synonyms": ["cDC", "conventional DC"], "tissues": ["pbmc", "immune"], "parent": "CL:0000738", "markers": ["FCER1A", "CST3"]},
+    {"id": "CL:0000784", "name": "plasmacytoid dendritic cell", "synonyms": ["pDC"], "tissues": ["pbmc", "immune"], "parent": "CL:0000451", "markers": ["IL3RA", "CLEC4C"]},
+    {"id": "CL:0000233", "name": "platelet", "synonyms": ["thrombocyte"], "tissues": ["pbmc", "blood"], "parent": "CL:0000763", "markers": ["PPBP", "PF4"]},
+    {"id": "CL:0000540", "name": "neuron", "synonyms": ["neuronal cell"], "tissues": ["brain"], "parent": "CL:0002319", "markers": ["RBFOX3", "SNAP25"]},
+    {"id": "CL:0000127", "name": "astrocyte", "synonyms": ["astroglia"], "tissues": ["brain"], "parent": "CL:0000125", "markers": ["AQP4", "GFAP"]},
+    {"id": "CL:0000128", "name": "oligodendrocyte", "synonyms": [], "tissues": ["brain"], "parent": "CL:0000125", "markers": ["MBP", "PLP1"]},
+    {"id": "CL:0000129", "name": "microglial cell", "synonyms": ["microglia"], "tissues": ["brain"], "parent": "CL:0000451", "markers": ["CX3CR1", "P2RY12"]},
+    {"id": "CL:0000182", "name": "hepatocyte", "synonyms": ["liver parenchyma"], "tissues": ["liver"], "parent": "CL:0000181", "markers": ["ALB", "APOA1"]},
+    {"id": "CL:0000091", "name": "Kupffer cell", "synonyms": ["liver macrophage"], "tissues": ["liver"], "parent": "CL:0000235", "markers": ["CD68", "MARCO"]},
+    {"id": "CL:0000115", "name": "endothelial cell", "synonyms": ["endothelium"], "tissues": ["liver", "heart", "kidney"], "parent": "CL:0000071", "markers": ["PECAM1", "VWF"]},
+    {"id": "CL:0000746", "name": "cardiac muscle cell", "synonyms": ["cardiomyocyte"], "tissues": ["heart"], "parent": "CL:0000187", "markers": ["TNNT2", "MYH7"]},
+    {"id": "CL:0000057", "name": "fibroblast", "synonyms": [], "tissues": ["heart"], "parent": "CL:0000056", "markers": ["DCN", "COL1A1"]},
+    {"id": "CL:0002306", "name": "epithelial cell of proximal tubule", "synonyms": ["PT", "proximal tubule"], "tissues": ["kidney"], "parent": "CL:0000066", "markers": ["CUBN", "LRP2"]},
+    {"id": "CL:1001106", "name": "kidney loop of Henle thick ascending limb epithelial cell", "synonyms": ["TAL"], "tissues": ["kidney"], "parent": "CL:0000066", "markers": ["UMOD", "SLC12A1"]},
+    {"id": "CL:0000653", "name": "podocyte", "synonyms": ["glomerular visceral epithelial cell"], "tissues": ["kidney"], "parent": "CL:0000066", "markers": ["NPHS1", "NPHS2"]}
+  ]
+}

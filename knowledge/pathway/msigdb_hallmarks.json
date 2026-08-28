@@ -1,0 +1,13 @@
+{
+  "source": "MSigDB Hallmark (Liberzon 2015) offline subset",
+  "url": "https://www.gsea-msigdb.org/gsea/msigdb",
+  "note": "Compact gene lists for offline ORA. Not the full MSigDB GMT.",
+  "sets": [
+    {"id": "HALLMARK_INTERFERON_GAMMA_RESPONSE", "collection": "H", "genes": ["STAT1", "IRF1", "CXCL9", "CXCL10", "GBP1", "IDO1", "SOCS1", "ICAM1", "HLA-DRA", "CD274"]},
+    {"id": "HALLMARK_G2M_CHECKPOINT", "collection": "H", "genes": ["TOP2A", "MKI67", "CCNB1", "CDK1", "BIRC5", "PLK1", "CDC20", "UBE2C", "CENPF", "HMGB2"]},
+    {"id": "HALLMARK_HYPOXIA", "collection": "H", "genes": ["VEGFA", "LDHA", "PGK1", "SLC2A1", "ENO1", "HIF1A", "CA9", "BNIP3", "PDK1", "ALDOA"]},
+    {"id": "HALLMARK_TNFA_SIGNALING_VIA_NFKB", "collection": "H", "genes": ["NFKB1", "TNF", "IL6", "CXCL1", "RELA", "NFKBIA", "JUN", "FOS", "ICAM1", "CCL2"]},
+    {"id": "HALLMARK_OXIDATIVE_PHOSPHORYLATION", "collection": "H", "genes": ["NDUFA1", "COX5A", "UQCRC1", "ATP5F1A", "SDHB", "CYCS", "VDAC1", "ATP5MC1", "NDUFS1", "COX7A2"]},
+    {"id": "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION", "collection": "H", "genes": ["VIM", "FN1", "CDH2", "SNAI1", "TWIST1", "MMP2", "COL1A1", "ACTA2", "ZEB1", "SPARC"]}
+  ]
+}

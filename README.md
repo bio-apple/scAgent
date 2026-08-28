@@ -4,7 +4,7 @@
 
 LangGraph 单细胞生信智能体。相对 CellAgent / 泛用 SciAgent-Skills，这里强制 **组织感知 QC + 执行结果审查 + 可审计脚本**（不只是生成教程代码）。
 
-现有 SciAgent-style skills **原样保留**。RAG 默认检索 `knowledge/papers`，并索引 `best_practices/`（`reference/` 步骤摘要 + `update-kb` 拉取的 sc-best-practices）以及 `knowledge/sops/`（实验室 SOP）。
+现有 SciAgent-style skills **原样保留**。`knowledge/` 同时提供融合 RAG 与结构化知识库（Cell Ontology / CellMarker·PanglaoDB / MSigDB / 疾病签名 / HCA 组织图谱的离线子集）。注释与解读检索的是 JSON 记录，不是 prompt 散文。
 
 ## Quick Start
 
@@ -165,8 +165,8 @@ flowchart TD
 | Agent | 职责 | 典型产出 |
 |-------|------|----------|
 | QC & Preprocessing | 数据校验、MAD/双细胞/ambient、HVG、PCA | `qc_strategy`、LOCKED QC 块 |
-| Clustering & Differential | Leiden、CellTypist+scANVI/Azimuth、marker 双验证、pseudobulk DEG | `annotation_plan`、`cluster_annotate.py` |
-| Biological Interpretation | 通路富集（GSEA/GSVA/ORA）+ 本地 RAG | `interpretation_plan` |
+| Clustering & Differential | Leiden、CellTypist+scANVI/Azimuth、**结构化 marker_db + CL**、双验证、pseudobulk DEG | `annotation_plan`、`cluster_annotate.py` |
+| Biological Interpretation | 通路富集（GSEA/GSVA/ORA）+ **融合 RAG** + MSigDB/疾病签名 JSON | `interpretation_plan` |
 | Code Audit & Execution | 策略→可执行代码、schema/DAG 拦截、Rscript/Jupyter、失败自修复 | `workspace/*.py`、`run_manifest.json` |
 
 阶段 Reviewer 同时审查 **代码** 与 **execution**（metrics、`SCAGENT_WARN`）；发表级 Reviewer 汇总 QC / marker / DEG / 图 / 批次校正。Writer **只**根据 `artifacts` 写报告，未 `--execute` 时标明「未执行」。
@@ -330,7 +330,7 @@ inspect 阶段会：
 | `--annotate-only` | 跳过 QC，需已有 `adata_qc.h5ad` |
 | `--interrupt` | 在线粒体阈值与 Leiden resolution 两处暂停；看 `outputs/decisions/*.html` 再 `scagent confirm` |
 | `--resolution` | 固定 Leiden resolution（跳过 resolution 确认） |
-| `scagent update-kb` | 拉取最新 sc-best-practices 到 `best_practices/upstream/` 并重建索引 |
+| `scagent update-kb` | 拉取最新 sc-best-practices 到 `knowledge/upstream/` 并重建索引 |
 | `scagent add-doc <path>` | 把实验室 SOP（md/txt/pdf/ipynb）复制到 `knowledge/sops/` 并纳入 RAG |
 | `scagent confirm mt\|resolution <选项>` | 湿实验选定预设档后继续下阶段 |
 | `--batch-key` | 批次列名 |
@@ -343,7 +343,8 @@ inspect 阶段会：
 python -m scagent update-kb
 python -m scagent add-doc ./lab_qc_sop.md
 python -m scagent retrieve "Harmony versus scVI"
-python -m scagent retrieve "B cell MS4A1" --collections papers,markers
+python -m scagent retrieve "B cell MS4A1" --collections papers,marker_db,cell_ontology
+python -m scagent retrieve "CL:0000084 T cell"
 python -m scagent retrieve "pseudobulk FDR" --collections best_practices,papers
 python -m scagent memory
 python -m scagent view --serve
@@ -370,20 +371,20 @@ python -m scagent skills
 | `--gpu` | CUDA 可用时为 scVI 启用 GPU |
 | `--rapids` | RAPIDS neighbors/UMAP（需 rapids-singlecell） |
 
-把 PDF 放入 `knowledge/papers/` 后重新 `ingest`。`scagent update-kb` 从 [theislab/single-cell-best-practices](https://github.com/theislab/single-cell-best-practices) 拉取最新章节到 `best_practices/upstream/` 并重建索引。实验室 SOP：`scagent add-doc <path>`，写入 `knowledge/sops/`。步骤级摘要仍在 `best_practices/reference/`。自定义 marker CSV 列：`cell_type,positive,negative,lineage`（`;` 分隔）。
+把 PDF 放入 `knowledge/papers/` 后重新 `ingest`。`scagent update-kb` 从 [theislab/single-cell-best-practices](https://github.com/theislab/single-cell-best-practices) 拉取最新章节到 `knowledge/upstream/` 并重建索引。实验室 SOP：`scagent add-doc <path>`，写入 `knowledge/sops/`。步骤 SOP 在 `knowledge/best_practices/`，与文献一次融合检索。自定义 marker CSV 列：`cell_type,positive,negative,lineage`（`;` 分隔）。
 
-## Tool Router（R 优先）
+## Tool Router（R 优先，Python 仅后备）
 
-与 SciAgent 原生路由一致：**Always use R ecosystem first. Only invoke Python when R lacks the required functionality.**
+语言由 `scagent.tool_router` **硬编码**，禁止 LLM 自选。判定：R 能做 → 用 R；不能 → 才用 Python。
 
-| 功能 | R 默认 | Python 备用 |
-|------|--------|-------------|
-| QC / Normalize | Seurat | Scanpy |
-| Integration | Harmony (R) | harmonypy / scVI / Scanorama |
-| Annotation | Azimuth | CellTypist + scANVI → `scagent_annotation` |
-| Trajectory | Monocle3 | DPT / PAGA / Palantir / scVelo |
-| CellChat | CellChat (R) | — |
-| Spatial | Giotto | Squidpy |
+| 功能 | 首选 (R) | 后备 (Python) |
+|------|----------|---------------|
+| QC | Seurat | Scanpy |
+| 聚类 | Seurat | Scanpy |
+| 批次矫正 | Harmony | scVI |
+| 注释 | Azimuth / SingleR | CellTypist |
+| 通讯 | CellChat | Squidpy |
+| 空间 | Giotto | Squidpy |
 
 配置见 `config.yaml` → `tool_router` + `analysis.language`：
 
@@ -395,7 +396,7 @@ python -m scagent skills
 
 ## 设计选择
 
-- **Skills**：不拆成 `skills/R` 与 `skills/python`。fingerprint 写入 `run_manifest.json`。内置 **142** 个单细胞 skill：保留原有 10 个 SciAgent core，并从 [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) 同步 **144** 条 `bioskill_index_v3.csv` 单细胞索引（去重后 132 新增；清单见 `skills/awesome_single_cell_manifest.json`）。Planner 按任务关键词推荐子集；`python -m scagent skills` 列出全部。
+- **Skills**：不拆成 `skills/R` 与 `skills/python`。fingerprint 写入 `run_manifest.json`。内置 **99** 个单细胞 skill：10 个 SciAgent core 原样保留，其余从 [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) 的 144 条单细胞索引去重导入（去掉 core 克隆、索引目录、以及被误标的 bulk/流式/ChIP 等）。清单见 `skills/awesome_single_cell_manifest.json`；`scripts/sync_awesome_single_cell_skills.py --prune` 可再清冗余。Planner 按任务从全部 skill 自动检索并推荐子集（最多 24 个写入 plan.skills）；完整目录按主题分组注入 Planner。`python -m scagent skills` 列出全部。
 - **版本兼容**：`run_manifest.json` 写入 `scagent_version`。`--resume` 时对照当前包版本：主版本变更拒绝续跑（分析脚本/schema 可能不兼容），次版本警告，`--force-resume` 可覆盖。无版本字段的旧 manifest 警告后继续。
 - **整合**：可选模块。inspect 扫描 `sample`/`batch`/`donor`/`orig.ident`/`library_id` 等列，或把 `--data` 的多个路径当作多样本。检测到 ≥2 批次且与条件非 1:1 共线时，**auto 自动校正**。默认 Harmony；≥10 万细胞或 ≥8 样本改 scVI。`--integrator none` 可关；`cca`/`scanorama`=Scanorama，`bbknn` 改邻居图。样本与条件 1:1 共线时跳过，避免把处理效应当批次抹掉。报告写决策理由、校正前后 PCA/UMAP 批次着色，以及 iLISI/kBET/PCA-R²；**禁止把 UMAP 混匀当整合成功**。
 - **HVG**：默认 `flavor=seurat_v3` 在 `layers['counts']` 上选，多样本按 batch 取并集（Heumos 2023）。无 counts 则回退 `seurat`。PCA `use_highly_variable=True`。探索性 Wilcoxon 强制 `use_raw`，不在 scale 后的 X 上做。
@@ -406,7 +407,7 @@ python -m scagent skills
 - **DE**：探索性 cluster marker 默认 Wilcoxon，可在任务中指定 **t-test / MAST / DESeq2 / edgeR**。组间比较按 sample × cell type 加和 raw counts（edgeR QL / DESeq2 / t-test+BH），**不用**细胞水平 Wilcoxon/MAST 当结论。默认跑第二检验做基因列表交叉验证（overlap/Jaccard 写入 metrics，Reviewer 会读）。`--deg-engine` / `--marker-method` / `--deg-cross-validate` 或 `config.deg.*` 可固定。MAST 需 R 包，缺则跳过。
 - **整合评估**：优先 scIB iLISI/kBET，否则 kNN-iLISI 与 PCA 批次 R²；不再只靠 cluster 主导批次比例。Reviewer 还会生成校正前后 PCA/UMAP 批次着色诊断图，并嵌入 Publication Report；UMAP 混匀不是整合成功的证据。
 - **插补**：MAGIC / ALRA 可选，不改 DE 用的 X。
-- **RAG**：BM25 + 向量召回 + Rerank；中英同义扩展（批次效应校正 → Harmony）。文档按章节/段落切分。`update-kb` / `add-doc` 后自动 `ingest`。向量模型可选 `pip install -e '.[rag]'`（sentence-transformers），未安装时用稳定 hashing 向量。
+- **RAG / 知识库**：语料统一在 `knowledge/`。**融合检索**（默认 `scagent retrieve`）：BM25 + 向量 + RRF，跨 `papers` / `best_practices` / `methods` / `sops` / `upstream` 一次召回；SOP 按分析路线加权。**结构化 KB**（JSON 记录，非 prompt 散文）：`cell_ontology`（CL）、`marker_db`（CellMarker/PanglaoDB）、`pathway`（MSigDB/GO 子集）、`disease_signature`（≥2 marker + DOI）、`tissue_reference`（HCA）。注释/解读 Agent 与工具 `lookup_knowledge` 走 `scagent.kb.lookup_structured`。详见 [`knowledge/README.md`](knowledge/README.md)。`update-kb` / `add-doc` 后 `ingest` 重建索引。向量可选 `pip install -e '.[rag]'`，否则 hashing 回退。
 - **Checkpoint**：LangGraph SQLite 只存 AgentState（路径与参数），**从不把 AnnData 放进 state**。h5ad 快照在 `.cache/snapshots/<thread>/`：能硬链接就不拷贝 X；X 未变时只存 obs 增量。`scagent snapshots` / `scagent branch --from-thread … --as …` 分叉参数实验。
 - **可复现导出**：每阶段同步写出 **[结论] + [代码]**（`outputs/dual.md`）。Python 路径为 `outputs/analysis.ipynb`（markdown 结论 cell + 无污染 Scanpy 代码 cell；空间任务才写 Squidpy）。`--execute` 默认用 **Jupyter**（nbclient/ipykernel）在 `workspace/` 后台执行，**不走 seatbelt/bwrap**，避免挡住写图；静态 policy + DAG schema 仍拦截危险调用。`--language r` 写双重格式 `analysis.Rmd`（Seurat 可运行块），scAgent 不执行 R kernel。
 - **交互查看**：`outputs/viewer.html` 用 Plotly.js（CDN）画 UMAP/violin，支持 Box/Lasso 框选。`scagent view --serve` 可当场提问；或下载 `selection.json` 再 `scagent ask --selection …`。静态 PNG 仍保留给论文。
@@ -437,4 +438,4 @@ pytest -q
 
 有 scanpy/anndata 时会跑小型合成 h5ad 的 QC 执行测试。Push/PR 走 GitHub Actions（pytest + flake8 + black）。
 
-Skills 参考：原有 [SciAgent-Skills single-cell](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell)（10 个 core skill 原样保留）；并 vendor [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) 的 **Single-Cell Analysis** 全部分类（144 索引 → 142 目录，`scripts/sync_awesome_single_cell_skills.py` 可重同步）。legacy [`single-cell-annotation`](https://github.com/jaechang-hits/SciAgent-Skills/blob/main/legacy/single-cell-annotation/SKILL.md) 与 [`cellchat-cell-communication`](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/systems-biology-multiomics/cellchat-cell-communication) 仍在 `skills/` 下。
+Skills 参考：原有 [SciAgent-Skills single-cell](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/genomics-bioinformatics/single-cell)（10 个 core skill 原样保留）；并 vendor [awesome-bio-agent-skills](https://github.com/BioTender-max/awesome-bio-agent-skills) 的 **Single-Cell Analysis** 分类（144 索引去重后 99 目录，`scripts/sync_awesome_single_cell_skills.py` 可重同步/剪枝）。legacy [`single-cell-annotation`](https://github.com/jaechang-hits/SciAgent-Skills/blob/main/legacy/single-cell-annotation/SKILL.md) 与 [`cellchat-cell-communication`](https://github.com/jaechang-hits/SciAgent-Skills/tree/main/skills/systems-biology-multiomics/cellchat-cell-communication) 仍在 `skills/` 下。

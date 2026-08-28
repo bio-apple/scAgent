@@ -11,13 +11,12 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rag.ingest import collection_dir, ingest
+from rag.ingest import SKIP_DIR_NAMES, SKIP_FILE_NAMES, collection_dir, ingest
 from rag.retriever import clear_retrieve_cache
-from scagent.config import REPO_ROOT, load_config, resolve_path
+from scagent.config import load_config, resolve_path
 
 SCBP_GIT = "https://github.com/theislab/single-cell-best-practices.git"
 DOC_EXTS = {".md", ".txt", ".pdf", ".ipynb"}
-SKIP_DIR_NAMES = {"_build", "figures", "datasets", ".git", "__pycache__", ".ipynb_checkpoints", "node_modules"}
 
 
 def cache_repo_dir(cfg: dict | None = None) -> Path:
@@ -27,8 +26,7 @@ def cache_repo_dir(cfg: dict | None = None) -> Path:
 
 def book_dest(cfg: dict | None = None) -> Path:
     cfg = cfg or load_config()
-    root = Path(cfg.get("_root") or REPO_ROOT)
-    return root / "best_practices" / "upstream"
+    return resolve_path(cfg, "knowledge") / "upstream"
 
 
 def sops_dir(cfg: dict | None = None) -> Path:
@@ -117,7 +115,7 @@ def sync_book(src: Path, dest: Path) -> int:
             continue
         if any(part in SKIP_DIR_NAMES for part in path.parts):
             continue
-        if path.name in {"README.md"}:
+        if path.name in SKIP_FILE_NAMES:
             continue
         rel = path.relative_to(root)
         target = dest / rel
@@ -149,7 +147,7 @@ def update_kb(
     fetch: bool = True,
     reindex: bool = True,
 ) -> dict:
-    """Pull theislab/single-cell-best-practices and index it under best_practices/upstream."""
+    """Pull theislab/single-cell-best-practices and index it under knowledge/upstream."""
     cfg = cfg or load_config()
     url = url or SCBP_GIT
     repo = Path(repo_dir) if repo_dir else cache_repo_dir(cfg)

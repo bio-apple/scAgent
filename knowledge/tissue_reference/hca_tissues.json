@@ -1,0 +1,42 @@
+{
+  "source": "Human Cell Atlas organ atlases (curated subset)",
+  "url": "https://www.humancellatlas.org",
+  "note": "Expected cell-type maps for tissue-aware annotation. Not a download of HCA matrices.",
+  "tissues": [
+    {
+      "id": "pbmc",
+      "name": "peripheral blood mononuclear cells",
+      "atlas": "HCA Immune / Domínguez Conde 2022",
+      "expected_types": ["T cell", "CD4 T", "CD8 T", "NK", "B cell", "CD14 monocyte", "CD16 monocyte", "cDC", "pDC", "Platelet"],
+      "qc_note": "Blood mito usually low; check HB contamination."
+    },
+    {
+      "id": "brain",
+      "name": "brain",
+      "atlas": "HCA Nervous system",
+      "expected_types": ["Neuron", "Astrocyte", "Oligodendrocyte", "Microglia"],
+      "qc_note": "Ambient RNA common; microglia are immune-lineage."
+    },
+    {
+      "id": "liver",
+      "name": "liver",
+      "atlas": "Aizarani 2019 human liver cell atlas",
+      "expected_types": ["Hepatocyte", "Kupffer", "Endothelial"],
+      "qc_note": "Hepatocyte mito can be high; do not copy blood cutoffs."
+    },
+    {
+      "id": "kidney",
+      "name": "kidney",
+      "atlas": "HCA Kidney / Adult_Human_Kidney CellTypist",
+      "expected_types": ["PT", "TAL", "Podocyte", "Endothelial"],
+      "qc_note": "Epithelial diversity; MAD per sample."
+    },
+    {
+      "id": "heart",
+      "name": "heart",
+      "atlas": "Litviňuková 2020 cells of the adult human heart",
+      "expected_types": ["Cardiomyocyte", "Fibroblast", "Endothelial"],
+      "qc_note": "Cardiomyocyte mito naturally high; relax MAD."
+    }
+  ]
+}

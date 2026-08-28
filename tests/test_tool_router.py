@@ -1,4 +1,5 @@
 from scagent.tool_router import (
+    PREFERENCE_TABLE,
     analysis_language,
     build_tool_route,
     format_route_table,
@@ -7,11 +8,52 @@ from scagent.tool_router import (
 )
 
 
+def test_preference_table_r_first_python_backup():
+    expected = {
+        "qc": ("seurat", "scanpy"),
+        "clustering": ("seurat", "scanpy"),
+        "integration": ("harmony_r", "scvi"),
+        "annotation": ("azimuth", "celltypist"),
+        "cellchat": ("cellchat", "squidpy"),
+        "spatial": ("giotto", "squidpy"),
+    }
+    got = {mod: (r_tool, py_tool) for mod, r_tool, py_tool in PREFERENCE_TABLE}
+    for mod, pair in expected.items():
+        assert got[mod] == pair
+
+
 def test_router_defaults_r_first():
     cfg = {"tool_router": {"policy": "r_first"}, "analysis": {"language": "r_first"}}
     r = resolve_module("qc", cfg=cfg)
     assert r["primary_tool"] == "seurat"
     assert r["fallback_tool"] == "scanpy"
+
+
+def test_integration_python_backup_is_scvi():
+    cfg = {"tool_router": {"policy": "r_first"}, "analysis": {"language": "r_first"}}
+    r = resolve_module("integration", cfg=cfg, meta={"need_batch_correction": True})
+    assert r["primary_tool"] == "harmony_r"
+    assert r["fallback_tool"] == "scvi"
+
+
+def test_annotation_python_backup_is_celltypist():
+    cfg = {"tool_router": {"policy": "python_only"}, "analysis": {"language": "python"}}
+    r = resolve_module("annotation", cfg=cfg)
+    assert r["engine"] == "python"
+    assert r["tool"] == "celltypist"
+    assert r["primary_tool"] == "azimuth"
+
+
+def test_llm_does_not_set_language():
+    """plan.language / LLM fields must not override the router."""
+    cfg = {"tool_router": {"policy": "r_first"}, "analysis": {"language": "r_first"}}
+    r = resolve_module(
+        "qc",
+        cfg=cfg,
+        plan={"language": "python", "narrative": "please use scanpy"},
+    )
+    assert r["primary_tool"] == "seurat"
+    assert r["policy"] == "r_first"
 
 
 def test_python_only_forces_scanpy():

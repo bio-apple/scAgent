@@ -64,16 +64,19 @@ rag:
   embed_model: sentence-transformers/all-MiniLM-L6-v2
   candidate_k: 24
   rrf_k: 60
-  # 默认检索 papers；methods / markers / best_practices 作为补充知识源一并入库
-  default_collection: papers
+  # fused = 跨 collection 一次检索；best_practices SOP 按分析路线加权
+  default_collection: fused
   collections:
+    - cell_ontology
+    - marker_db
+    - pathway
+    - disease_signature
+    - tissue_reference
     - papers
     - methods
-    - markers
     - best_practices
     - sops
-  collection_dirs:
-    best_practices: best_practices   # reference/ 摘要 + update-kb 写入的 upstream/
+    - upstream
 
 checkpoint:
   backend: sqlite             # sqlite | memory | redis
@@ -138,23 +141,27 @@ modules:
   ambient: auto               # auto | none | soupx | decontx；brain/tumor 的 auto → soupx
   trajectory: auto            # auto=按组织/spliced 层评估连续性；force=用户要轨迹也拟合；off=关
 
-# SciAgent Tool Router：R 优先，Python 备用（与 SciAgent 原生路由表一致）
+# SciAgent Tool Router：R 优先，Python 仅后备。语言由本表硬编码，禁止 LLM 自选。
+# 判定：R 能做 → 用 R；R 不能做 → 才用 Python。
 tool_router:
   policy: r_first             # r_first | python_first | r_only | python_only
   defaults:
     qc: seurat
+    clustering: seurat
     normalize: seurat
-    integration: harmony_r
-    annotation: azimuth
+    integration: harmony_r    # Harmony (R)
+    annotation: azimuth       # Azimuth；缺包则 SingleR
     trajectory: monocle3
     cellchat: cellchat
     spatial: giotto
   python_fallback:
     qc: scanpy
+    clustering: scanpy
     normalize: scanpy
-    integration: harmony_py
-    annotation: scanpy
+    integration: scvi         # Harmony 不可用时才 scVI
+    annotation: celltypist    # Azimuth/SingleR 不可用时才 CellTypist
     trajectory: scanpy
+    cellchat: squidpy
     spatial: squidpy
 
 # 整合质量（scIB iLISI/kBET 优先；否则 PCA 批次 R²）。未达标审查失败并触发重试。

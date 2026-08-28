@@ -59,6 +59,14 @@ GO_SETS: dict[str, tuple[str, ...]] = {
 
 
 def default_gene_sets() -> dict[str, tuple[str, ...]]:
+    try:
+        from scagent.kb import gene_sets_from_kb
+
+        loaded = gene_sets_from_kb()
+        if loaded:
+            return loaded
+    except Exception:
+        pass
     return {**HALLMARK_LIKE, **GO_SETS}
 
 

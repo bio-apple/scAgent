@@ -1,4 +1,7 @@
-"""SciAgent Tool Router: R-first defaults with Python fallback."""
+"""SciAgent Tool Router: R-first defaults with Python fallback.
+
+Language is decided here, never by the LLM. Can R do it? → R; else Python.
+"""
 
 from __future__ import annotations
 
@@ -8,29 +11,39 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from scagent.config import REPO_ROOT, load_config
+from scagent.config import load_config
 from scagent.logutil import get_logger
 
 log = get_logger("tool_router")
 
 R_DIR = Path(__file__).resolve().parent / "r"
 
+# Frozen preference table (function → R preferred → Python backup). LLM must not override.
+PREFERENCE_TABLE: tuple[tuple[str, str, str], ...] = (
+    ("qc", "seurat", "scanpy"),
+    ("clustering", "seurat", "scanpy"),
+    ("normalize", "seurat", "scanpy"),
+    ("integration", "harmony_r", "scvi"),
+    ("annotation", "azimuth", "celltypist"),
+    ("cellchat", "cellchat", "squidpy"),
+    ("spatial", "giotto", "squidpy"),
+    ("trajectory", "monocle3", "scanpy"),
+    ("deg", "edger", "ttest"),
+)
+
 # module -> (R tool id, Python fallback id)
 _BUILTIN_DEFAULTS: dict[str, tuple[str, str | None]] = {
-    "qc": ("seurat", "scanpy"),
-    "normalize": ("seurat", "scanpy"),
-    "integration": ("harmony_r", "harmony_py"),
-    "annotation": ("azimuth", "scanpy"),
-    "trajectory": ("monocle3", "scanpy"),
-    "cellchat": ("cellchat", None),
-    "spatial": ("giotto", "squidpy"),
-    "deg": ("edger", "ttest"),
+    mod: (r_tool, py_tool) for mod, r_tool, py_tool in PREFERENCE_TABLE
 }
+
+# Annotation: Azimuth first, SingleR if Azimuth missing, then CellTypist.
+_ANNOTATION_R_CHAIN = ("azimuth", "singler")
 
 _R_PACKAGES: dict[str, list[str]] = {
     "seurat": ["Seurat"],
     "harmony_r": ["harmony", "Seurat"],
     "azimuth": ["Azimuth", "Seurat"],
+    "singler": ["SingleR"],
     "monocle3": ["monocle3"],
     "cellchat": ["CellChat", "Seurat"],
     "giotto": ["Giotto"],
@@ -40,6 +53,7 @@ _R_PACKAGES: dict[str, list[str]] = {
 _R_SCRIPTS: dict[str, str] = {
     "qc": "pipeline_qc.R",
     "normalize": "pipeline_qc.R",
+    "clustering": "pipeline_annotate.R",
     "integration": "harmony_integrate.R",
     "annotation": "pipeline_annotate.R",
     "trajectory": "monocle3.R",
@@ -144,6 +158,14 @@ def resolve_module(
     if policy == "python_only":
         return _pick(fallback or primary, "python", primary, fallback, policy, "python_only policy")
 
+    if module == "annotation" and policy in {"r_first", "r_only"}:
+        for r_tool in _ANNOTATION_R_CHAIN:
+            if r_tool_ready(r_tool):
+                return _pick(r_tool, "r", primary, fallback, policy, f"R tool {r_tool} available")
+        if policy == "r_only":
+            return _pick(fallback or "celltypist", "python", primary, fallback, policy, "R annotation missing; r_only degrades")
+        return _pick(fallback or "celltypist", "python", primary, fallback, policy, "R Azimuth/SingleR missing; CellTypist fallback")
+
     if policy == "r_only" or policy == "r_first":
         if r_tool_ready(primary):
             return _pick(primary, "r", primary, fallback, policy, f"R tool {primary} available")
@@ -190,7 +212,7 @@ def build_tool_route(
     modules: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Full routing table for planner / report."""
-    mods = modules or ("qc", "normalize", "integration", "annotation", "trajectory", "cellchat", "spatial", "deg")
+    mods = modules or ("qc", "clustering", "normalize", "integration", "annotation", "trajectory", "cellchat", "spatial", "deg")
     cfg = cfg or load_config()
     routes: dict[str, dict] = {}
     for mod in mods:
@@ -201,7 +223,10 @@ def build_tool_route(
         "policy": router_cfg(cfg)["policy"],
         "language": analysis_language(cfg),
         "r_available": bool(rscript_path()),
-        "system_prompt": "Always use R ecosystem first. Only invoke Python when R lacks the required functionality.",
+        "system_prompt": (
+            "Always use R ecosystem first. Only invoke Python when R lacks the required functionality. "
+            "Do not let the LLM decide the language; follow this Tool Router table."
+        ),
         "routes": routes,
     }
     return summary
@@ -270,18 +295,22 @@ def run_r_phase(
 def format_route_table(route: dict[str, Any], *, lang: str = "zh") -> str:
     zh = lang != "en"
     lines = [
-        "**Tool Router（R 优先）**" if zh else "**Tool Router (R-first)**",
+        "**Tool Router（R 优先，Python 仅后备）**" if zh else "**Tool Router (R first, Python backup only)**",
         "",
         f"- policy: `{route.get('policy')}` | Rscript: `{route.get('r_available')}`",
         "",
-        "| 功能 | 选用 | engine | 原因 |" if zh else "| module | tool | engine | reason |",
-        "|---|---|---|---|",
+        "| 功能 | 首选 (R) | 后备 (Python) | 本次选用 | engine | 原因 |"
+        if zh
+        else "| function | preferred (R) | backup (Python) | chosen | engine | reason |",
+        "|---|---|---|---|---|---|",
     ]
+    pref = {mod: (r_tool, py_tool) for mod, r_tool, py_tool in PREFERENCE_TABLE}
     for mod, r in (route.get("routes") or {}).items():
         if r.get("engine") == "none":
             continue
+        r_pref, py_pref = pref.get(mod, (r.get("primary_tool"), r.get("fallback_tool")))
         lines.append(
-            f"| {mod} | {r.get('tool')} | {r.get('engine')} | {r.get('reason', '')} |"
+            f"| {mod} | {r_pref} | {py_pref} | {r.get('tool')} | {r.get('engine')} | {r.get('reason', '')} |"
         )
     lines.append("")
     lines.append(route.get("system_prompt") or "")

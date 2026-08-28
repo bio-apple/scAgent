@@ -225,6 +225,7 @@ def _one_lang(state: dict, lang: str) -> str:
         plan.get("narrative") or "",
         "",
         f"- skills: {', '.join(plan.get('skills') or [])}",
+        f"- best_practices: {', '.join(plan.get('best_practices') or [])}",
         f"- route: {' → '.join(plan.get('route') or [])}",
         f"- integrator: {plan.get('integrator')}",
         f"- imputation: {plan.get('imputation') or qc.get('imputation')}",
