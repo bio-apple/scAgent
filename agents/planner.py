@@ -157,6 +157,18 @@ def build_plan(state: dict) -> dict:
             )
         )
     )
+    from agents.literature import fetch_phase_literature
+
+    lit = (
+        {"paper_excerpt": "", "paper_recs": []}
+        if r_degraded
+        else fetch_phase_literature(
+            "plan",
+            tissue=str(meta.get("tissue") or ""),
+            platform=str(meta.get("platform") or ""),
+            user_query=str(state.get("user_query") or ""),
+        )
+    )
 
     pref = parse_deg_preference(state.get("user_query"))
     tool_route = build_tool_route(
@@ -208,6 +220,8 @@ def build_plan(state: dict) -> dict:
         "agents": assign_roles(route),
         "risks": [],
         "rag_excerpt": rag,
+        "paper_excerpt": lit.get("paper_excerpt") or "",
+        "paper_recs": lit.get("paper_recs") or [],
         "tool_route": tool_route,
     }
     if state.get("selection"):
@@ -254,9 +268,10 @@ def build_plan(state: dict) -> dict:
                 f"knowledge/best_practices:\n{practices_catalog_text()}\n"
                 f"本次选用 SOP: {', '.join(best_practices)}\n"
                 f"RAG（SOP + 文献融合）:\n{rag}\n"
+                f"文献段落（papers Methods/Results 加权）:\n{lit.get('paper_excerpt') or '（无）'}\n"
                 "这是 Plan-and-Solve + 多智能体：Planner 只分工，QC / 聚类DEG / 解读 / 代码审计各司其职。"
                 "禁止在 PCA/neighbors/UMAP/Leiden 之前做 DE 或 DPT/Monocle3。"
-                "请输出分析路线。"
+                "请结合文献最佳实践输出分析路线，并点名可引用的论文要点。"
             ),
         )
         plan["narrative"] = llm or (

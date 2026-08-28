@@ -77,6 +77,23 @@ rag:
     - best_practices
     - sops
     - upstream
+  papers:
+    parser_backend: mineru      # mineru | magic-pdf | pymupdf | pdfplumber | auto | marker | pypdf
+    auto_backends: [mineru, pymupdf, pdfplumber, marker]  # when parser_backend: auto
+    mineru:
+      cli: auto                # auto | mineru | magic-pdf
+      backend: pipeline        # pipeline (CPU) | hybrid-engine (GPU, default in MinerU 2.x)
+      method: auto             # auto | txt | ocr
+      lang: null               # e.g. en; improves OCR for pipeline backend
+      api_url: null            # reuse remote mineru-api instead of local temp service
+      timeout_seconds: 1200
+      keep_tmp: false
+    parsed_dir: knowledge/papers/.parsed
+    index_parsed_only: true    # index .parsed/*.md instead of raw PDF when available
+    auto_parse: false          # set true to parse PDFs on ingest; else run scagent parse-papers
+    chunk_size: 900
+    chunk_overlap: 150
+    prefer_sections: [methods, results, abstract, introduction]
 
 checkpoint:
   backend: sqlite             # sqlite | memory | redis

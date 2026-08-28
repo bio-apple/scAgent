@@ -5,7 +5,7 @@ import json
 import sys
 
 from rag.ingest import ingest
-from rag.retriever import clear_retrieve_cache, format_hits, retrieve, retrieve_fused
+from rag.retriever import clear_retrieve_cache, format_hits, format_paper_hits, retrieve, retrieve_fused, search_paper_knowledge
 from scagent.config import load_config
 from scagent.skills_loader import list_skills, load_skill_text
 
@@ -14,6 +14,39 @@ def cmd_ingest(_args: argparse.Namespace) -> int:
     path = ingest(force=True)
     clear_retrieve_cache()
     print(f"indexed → {path}")
+    return 0
+
+
+def cmd_parse_papers(args: argparse.Namespace) -> int:
+    from scagent.knowledge.parser import parse_papers_dir, sanitize_parsed_dir
+
+    if getattr(args, "sanitize_only", False):
+        rows = sanitize_parsed_dir()
+        n_changed = sum(1 for r in rows if r.get("changed"))
+        print(f"sanitized {n_changed}/{len(rows)} parsed markdown file(s)")
+        if args.ingest:
+            path = ingest(force=True)
+            clear_retrieve_cache()
+            print(f"indexed → {path}")
+        return 0
+
+    try:
+        rows = parse_papers_dir(backend=args.backend or "auto", force=args.force)
+    except Exception as exc:
+        print(f"parse-papers failed: {exc}")
+        return 1
+    n_new = sum(1 for r in rows if not r.get("skipped"))
+    n_skip = sum(1 for r in rows if r.get("skipped"))
+    print(f"parsed {n_new} PDF(s), skipped {n_skip} up-to-date")
+    for r in rows:
+        if r.get("skipped"):
+            continue
+        secs = ", ".join(r.get("sections") or [])
+        print(f"  {r.get('title') or r.get('pdf')} [{r.get('backend')}] ({secs})")
+    if args.ingest:
+        path = ingest(force=True)
+        clear_retrieve_cache()
+        print(f"indexed → {path}")
     return 0
 
 
@@ -53,13 +86,18 @@ def cmd_add_doc(args: argparse.Namespace) -> int:
 
 def cmd_retrieve(args: argparse.Namespace) -> int:
     cols = [c.strip() for c in args.collections.split(",") if c.strip()] if args.collections else None
-    if cols:
+    if args.papers:
+        hits = search_paper_knowledge(args.query, top_k=args.top_k)
+        print(format_paper_hits(hits))
+    elif cols:
         hits = retrieve(args.query, collections=cols, top_k=args.top_k)
+        print(format_hits(hits))
     elif args.collection:
         hits = retrieve(args.query, collection=args.collection, top_k=args.top_k)
+        print(format_hits(hits))
     else:
         hits = retrieve_fused(args.query, top_k=args.top_k)
-    print(format_hits(hits))
+        print(format_hits(hits))
     return 0
 
 
@@ -444,6 +482,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_ingest)
 
     s = sub.add_parser(
+        "parse-papers",
+        help="Parse knowledge/papers/*.pdf into section Markdown under knowledge/papers/.parsed/",
+    )
+    s.add_argument(
+        "--backend",
+        default=None,
+        help="PDF backend: mineru (default) | magic-pdf | pymupdf | auto | pdfplumber | marker | pypdf",
+    )
+    s.add_argument("--force", action="store_true", help="Re-parse even when .parsed is newer than PDF")
+    s.add_argument(
+        "--sanitize-only",
+        action="store_true",
+        help="Clean control chars / HTML leftovers in existing .parsed/*.md without re-parsing PDFs",
+    )
+    s.add_argument("--ingest", action="store_true", help="Run ingest after parsing")
+    s.set_defaults(func=cmd_parse_papers)
+
+    s = sub.add_parser(
         "update-kb",
         help="Fetch latest sc-best-practices (theislab) and rebuild RAG index",
     )
@@ -473,6 +529,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated subset, e.g. papers,marker_db,cell_ontology,best_practices",
     )
     s.add_argument("--top-k", type=int, default=None, help="Number of chunks to return")
+    s.add_argument(
+        "--papers",
+        action="store_true",
+        help="Search parsed papers only (boost Methods/Results/Abstract)",
+    )
     s.set_defaults(func=cmd_retrieve)
 
     s = sub.add_parser("skills", help="List bundled SciAgent-style skills")

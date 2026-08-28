@@ -344,6 +344,62 @@ def retrieve_fused(
     return _dedup_hits(extras + kb_hits + hits, want)
 
 
+PAPER_SECTION_WEIGHTS = {
+    "methods": 1.35,
+    "results": 1.3,
+    "abstract": 1.2,
+    "introduction": 1.05,
+    "discussion": 1.0,
+    "conclusion": 1.0,
+    "other": 1.0,
+}
+
+
+def search_paper_knowledge(
+    query: str,
+    *,
+    sections: list[str] | tuple[str, ...] | None = None,
+    top_k: int | None = None,
+    cfg: dict | None = None,
+) -> list[dict]:
+    """Retrieve from papers collection; boost Methods/Results/Abstract chunks."""
+    cfg = cfg or load_config()
+    rag = cfg.get("rag") or {}
+    papers_cfg = rag.get("papers") or {}
+    prefer = [s.lower() for s in (sections or papers_cfg.get("prefer_sections") or ["methods", "results", "abstract"])]
+    top_k = top_k or int(rag.get("top_k") or 6)
+    hits = retrieve(query, collections=["papers"], top_k=min(top_k * 3, 24), cfg=cfg)
+    if prefer:
+        filtered = [h for h in hits if str(h.get("section") or "other").lower() in prefer]
+        if filtered:
+            hits = filtered + [h for h in hits if h not in filtered]
+    boosted: list[dict] = []
+    for h in hits:
+        rec = dict(h)
+        sec = str(rec.get("section") or "other").lower()
+        rec["score"] = float(rec.get("score") or 0) * PAPER_SECTION_WEIGHTS.get(sec, 1.0)
+        boosted.append(rec)
+    boosted.sort(key=lambda x: x["score"], reverse=True)
+    return _dedup_hits(boosted, top_k)
+
+
+def format_paper_hits(hits: list[dict]) -> str:
+    if not hits:
+        return (
+            "No paper chunks matched. Run `scagent parse-papers` then `scagent ingest` "
+            "after adding PDFs under knowledge/papers/."
+        )
+    parts = []
+    for i, h in enumerate(hits, 1):
+        sec = h.get("section") or "body"
+        title_bit = h.get("stem") or Path(str(h.get("source") or "")).stem
+        parts.append(
+            f"[{i}] {title_bit} — {sec} ({h.get('source')}, score={h.get('score', 0):.3f})\n"
+            f"{h.get('text', '').strip()}"
+        )
+    return "\n\n".join(parts)
+
+
 def format_hits(hits: list[dict]) -> str:
     if not hits:
         return (

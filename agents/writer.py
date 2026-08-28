@@ -234,6 +234,18 @@ def _one_lang(state: dict, lang: str) -> str:
         f"- risks: {'; '.join(plan.get('risks') or []) or ('无' if zh else 'none')}",
         "",
     ]
+    from agents.literature import format_literature_report_block
+
+    lines += [
+        format_literature_report_block(
+            plan=plan,
+            qc=qc,
+            ann=ann,
+            interpret=state.get("interpretation_plan") or {},
+            lang=lang,
+        ).rstrip(),
+        "",
+    ]
     tr = plan.get("tool_route")
     if tr:
         from scagent.tool_router import format_route_table

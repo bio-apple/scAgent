@@ -42,6 +42,13 @@ def build_qc_strategy(state: dict) -> dict:
             user_query=state.get("user_query"),
         )
     )
+    from agents.literature import fetch_phase_literature
+
+    lit = fetch_phase_literature(
+        "qc",
+        tissue=tissue,
+        user_query=str(state.get("user_query") or ""),
+    )
     bp = practices_for_phase("qc", query=state.get("user_query"))
     nmads = int(prof.get("nmads") or (6 if tissue in {"heart", "tumor", "kidney"} else 5))
     method = str(qc_cfg.get("method") or "mad")
@@ -87,6 +94,8 @@ def build_qc_strategy(state: dict) -> dict:
         "imputation": imputation,
         "hitl_choice": state.get("qc_choice"),
         "rag_excerpt": rag,
+        "paper_excerpt": lit.get("paper_excerpt") or "",
+        "paper_recs": lit.get("paper_recs") or [],
         "best_practices": bp,
         "protocol": (
             f"QC method={method}（组织={tissue}）。禁止默认 mito%<5 / nFeature>200。\n"
@@ -114,7 +123,13 @@ def build_qc_strategy(state: dict) -> dict:
         )
     llm = run_specialist(
         read_prompt("qc_expert"),
-        f"metadata={json.dumps(meta, ensure_ascii=False)}\nprofile={json.dumps(prof, ensure_ascii=False)}\nRAG:\n{rag}",
+        (
+            f"metadata={json.dumps(meta, ensure_ascii=False)}\n"
+            f"profile={json.dumps(prof, ensure_ascii=False)}\n"
+            f"RAG:\n{rag}\n"
+            f"文献段落:\n{lit.get('paper_excerpt') or '（无）'}\n"
+            "请输出 QC 协议，并引用文献中的 mito%/MAD/双细胞相关建议。"
+        ),
     )
     if llm:
         strategy["protocol"] = llm

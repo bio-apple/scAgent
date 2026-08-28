@@ -144,14 +144,14 @@ def chunk_document(text: str, chunk_size: int, overlap: int, *, mode: str = "sem
     return chunk_semantic(text, chunk_size, overlap)
 
 
-def _read_pdf(path: Path) -> str:
-    from pypdf import PdfReader
+def _read_pdf(path: Path, *, cfg: dict | None = None) -> str:
+    from scagent.knowledge.parser import extract_pdf_text
 
-    reader = PdfReader(str(path))
-    pages = []
-    for page in reader.pages:
-        pages.append(page.extract_text() or "")
-    return "\n".join(pages)
+    cfg = cfg or load_config()
+    papers_cfg = (cfg.get("rag") or {}).get("papers") or {}
+    backend = str(papers_cfg.get("parser_backend") or "mineru")
+    text, _ = extract_pdf_text(path, backend=backend, cfg=cfg)
+    return text
 
 
 def _read_ipynb(path: Path) -> str:
@@ -172,7 +172,36 @@ def _read_ipynb(path: Path) -> str:
     return "\n\n".join(parts)
 
 
-def _iter_source_files(collection_dir: Path) -> Iterable[Path]:
+def _iter_papers_files(cfg: dict, col_dir: Path) -> Iterable[tuple[Path, str]]:
+    """Yield (path, kind) for papers collection: curated md, parsed md; skip raw pdf when parsed exists."""
+    from scagent.knowledge.parser import parsed_paths
+
+    papers_cfg = (cfg.get("rag") or {}).get("papers") or {}
+    index_parsed_only = papers_cfg.get("index_parsed_only", True)
+    _, parsed_dir = parsed_paths(cfg)
+    parsed_stems = {p.stem for p in parsed_dir.glob("*.md")} if parsed_dir.exists() else set()
+
+    for path in sorted(col_dir.glob("*.md")):
+        if path.name.startswith("."):
+            continue
+        yield path, "md"
+
+    if parsed_dir.exists():
+        for path in sorted(parsed_dir.glob("*.md")):
+            yield path, "parsed"
+
+    if not index_parsed_only:
+        for path in sorted(col_dir.glob("*.pdf")):
+            if path.stem in parsed_stems:
+                continue
+            yield path, "pdf"
+    else:
+        for path in sorted(col_dir.glob("*.pdf")):
+            if path.stem not in parsed_stems:
+                yield path, "pdf"
+
+
+def _iter_source_files(collection_dir: Path, *, collection: str = "", cfg: dict | None = None) -> Iterable[Path]:
     if not collection_dir.exists():
         return []
     files: list[Path] = []
@@ -188,15 +217,36 @@ def _iter_source_files(collection_dir: Path) -> Iterable[Path]:
     return out
 
 
+def _iter_collection_files(cfg: dict, collection: str, col_dir: Path) -> Iterable[tuple[Path, str]]:
+    if collection == "papers":
+        yield from _iter_papers_files(cfg, col_dir)
+        return
+    for path in _iter_source_files(col_dir):
+        kind = path.suffix.lower().lstrip(".")
+        yield path, kind
+
+
+def _index_sources(cfg: dict) -> Iterable[Path]:
+    """All source paths that affect index freshness."""
+    from scagent.knowledge.parser import parsed_paths
+
+    _, parsed_dir = parsed_paths(cfg)
+    for collection in cfg["rag"]["collections"]:
+        col_dir = collection_dir(cfg, collection)
+        for path, _kind in _iter_collection_files(cfg, collection, col_dir):
+            if path.name != "README.md":
+                yield path
+    if parsed_dir.exists():
+        for path in parsed_dir.glob("*.md"):
+            yield path
+
+
 def _index_fresh(cfg: dict, out: Path) -> bool:
     if not out.exists() or out.stat().st_size == 0:
         return False
     newest = 0.0
-    for collection in cfg["rag"]["collections"]:
-        for path in _iter_source_files(collection_dir(cfg, collection)):
-            if path.name == "README.md":
-                continue
-            newest = max(newest, path.stat().st_mtime)
+    for path in _index_sources(cfg):
+        newest = max(newest, path.stat().st_mtime)
     return newest <= out.stat().st_mtime
 
 
@@ -219,27 +269,49 @@ def ingest(cfg: dict | None = None, *, force: bool = False) -> Path:
     out = index_dir / "chunks.jsonl"
     if not force and _index_fresh(cfg, out):
         return out
+
+    from scagent.knowledge.parser import chunk_paper_markdown, ensure_papers_parsed
+
+    papers_cfg = (cfg.get("rag") or {}).get("papers") or {}
+    if papers_cfg.get("auto_parse", False):
+        ensure_papers_parsed(cfg, force=force)
+
     chunk_size = int(cfg["rag"]["chunk_size"])
     overlap = int(cfg["rag"]["chunk_overlap"])
     chunk_mode = str((cfg.get("rag") or {}).get("chunking") or "semantic")
+    paper_chunk_size = int(papers_cfg.get("chunk_size") or chunk_size)
+    paper_overlap = int(papers_cfg.get("chunk_overlap") or overlap)
 
     records: list[dict] = []
     root = Path(cfg.get("_root") or REPO_ROOT)
     for collection in cfg["rag"]["collections"]:
         col_dir = collection_dir(cfg, collection)
-        for path in _iter_source_files(col_dir):
+        for path, kind in _iter_collection_files(cfg, collection, col_dir):
             if path.name == "README.md":
                 continue
-            if path.suffix.lower() == ".pdf":
-                units = [_read_pdf(path)]
-            elif path.suffix.lower() == ".ipynb":
+            section_chunks = None
+            if kind == "pdf":
+                units = [_read_pdf(path, cfg=cfg)]
+            elif kind == "ipynb":
                 units = [_read_ipynb(path)]
-            elif path.suffix.lower() == ".json":
+            elif kind == "json":
                 from scagent.kb import flatten_json_texts
 
                 units = flatten_json_texts(path, collection=collection) or [
                     path.read_text(encoding="utf-8", errors="replace")
                 ]
+            elif collection == "papers" and kind in {"md", "parsed"}:
+                from scagent.knowledge.parser import sanitize_paper_text
+
+                text = sanitize_paper_text(path.read_text(encoding="utf-8", errors="replace"))
+                section_chunks = chunk_paper_markdown(
+                    text,
+                    source="",
+                    stem=path.stem,
+                    chunk_size=paper_chunk_size,
+                    overlap=paper_overlap,
+                )
+                units = []
             else:
                 units = [path.read_text(encoding="utf-8", errors="replace")]
             try:
@@ -247,24 +319,36 @@ def ingest(cfg: dict | None = None, *, force: bool = False) -> Path:
             except ValueError:
                 rel = str(path.relative_to(knowledge))
             chunks: list[str] = []
-            for unit in units:
-                if path.suffix.lower() == ".json":
-                    chunks.append(unit)
-                else:
-                    chunks.extend(chunk_document(unit, chunk_size, overlap, mode=chunk_mode))
+            chunk_meta: list[dict] = []
+            if section_chunks is not None:
+                for sc in section_chunks:
+                    sc["source"] = rel
+                    chunks.append(sc["text"])
+                    chunk_meta.append(sc)
+            else:
+                for unit in units:
+                    if kind == "json":
+                        chunks.append(unit)
+                        chunk_meta.append({})
+                    else:
+                        for part in chunk_document(unit, chunk_size, overlap, mode=chunk_mode):
+                            chunks.append(part)
+                            chunk_meta.append({})
             for i, chunk in enumerate(chunks):
                 if not chunk or not str(chunk).strip():
                     continue
-                records.append(
-                    {
-                        "id": f"{rel}::{i}",
-                        "collection": collection,
-                        "source": rel,
-                        "stem": path.stem,
-                        "chunk_index": i,
-                        "text": chunk,
-                    }
-                )
+                meta = chunk_meta[i] if i < len(chunk_meta) else {}
+                rec = {
+                    "id": f"{rel}::{i}",
+                    "collection": collection,
+                    "source": rel,
+                    "stem": path.stem,
+                    "chunk_index": i,
+                    "text": chunk,
+                }
+                if meta.get("section"):
+                    rec["section"] = meta["section"]
+                records.append(rec)
 
     out = index_dir / "chunks.jsonl"
     with out.open("w", encoding="utf-8") as f:

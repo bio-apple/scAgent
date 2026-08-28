@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
-from rag.retriever import format_hits, retrieve, retrieve_fused
+from rag.retriever import format_hits, format_paper_hits, retrieve, retrieve_fused, search_paper_knowledge as _search_papers
 from scagent.best_practices_loader import load_practice_text, practices_catalog_text
 from scagent.kb import format_records, lookup_structured
 from scagent.skills_loader import load_skill_text, skill_catalog_text
@@ -51,5 +51,21 @@ def lookup_knowledge(query: str, collection: str = "") -> str:
     return format_records(lookup_structured(query, collections=cols))
 
 
-TOOLS = [retrieve_papers, lookup_knowledge, list_analysis_skills, load_skill, list_best_practices, load_best_practice]
+@tool
+def search_paper_knowledge(query: str, sections: str = "") -> str:
+    """Search parsed paper PDFs (Methods/Results/Abstract). Use for literature-backed method choices, e.g. Harmony vs scVI."""
+    sec_list = [s.strip() for s in sections.split(",") if s.strip()] if sections else None
+    hits = _search_papers(query, sections=sec_list)
+    return format_paper_hits(hits)
+
+
+TOOLS = [
+    retrieve_papers,
+    search_paper_knowledge,
+    lookup_knowledge,
+    list_analysis_skills,
+    load_skill,
+    list_best_practices,
+    load_best_practice,
+]
 TOOLS_BY_NAME = {t.name: t for t in TOOLS}

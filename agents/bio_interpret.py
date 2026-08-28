@@ -25,6 +25,13 @@ def build_interpretation_plan(state: dict) -> dict:
             tissue=tissue,
         )
     )
+    from agents.literature import fetch_phase_literature
+
+    lit = fetch_phase_literature(
+        "interpret",
+        tissue=tissue,
+        user_query=str(state.get("user_query") or ""),
+    )
     kb = format_records(
         lookup_structured(
             f"{tissue} pathway disease signature Hallmark",
@@ -44,6 +51,8 @@ def build_interpretation_plan(state: dict) -> dict:
         "fdr_note": "GSEA 常用 FDR<0.25；ORA 报告 BH FDR。基因集选择比检验方法更关键（Heumos 2023）。",
         "gsva_note": gsva_note,
         "literature": rag,
+        "paper_excerpt": lit.get("paper_excerpt") or "",
+        "paper_recs": lit.get("paper_recs") or [],
         "knowledge": kb,
         "best_practices": bp,
         "deg_n_sig": genes_hint,
@@ -63,8 +72,9 @@ def build_interpretation_plan(state: dict) -> dict:
             f"deg_n_sig={genes_hint}\n"
             f"route={plan.get('route')}\n"
             f"RAG:\n{rag}\n"
+            f"文献段落:\n{lit.get('paper_excerpt') or '（无）'}\n"
             f"structured_kb:\n{kb}\n"
-            "输出解读要点：用什么基因集、为何不是 GSVA 默认、如何对照文献。"
+            "输出解读要点：用什么基因集、为何不是 GSVA 默认、如何对照文献最佳实践。"
         ),
     )
     if llm:

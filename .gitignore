@@ -18,6 +18,9 @@ outputs/*
 knowledge/.index/
 .cache/
 knowledge/upstream/
+knowledge/papers/.parsed/
+knowledge/papers/.marker_tmp/
+knowledge/papers/.mineru_tmp/
 knowledge/sops/**
 *.h5ad
 !tests/data/*.h5ad

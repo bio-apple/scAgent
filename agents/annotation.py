@@ -31,6 +31,13 @@ def build_annotation_plan(state: dict) -> dict:
             include_markers=True,
         )
     )
+    from agents.literature import fetch_phase_literature
+
+    lit = fetch_phase_literature(
+        "annotation",
+        tissue=tissue,
+        user_query=str(state.get("user_query") or ""),
+    )
     bp = practices_for_phase("annotation", route=list(plan_in.get("route") or []), query=state.get("user_query"))
     markers = format_records(
         lookup_structured(
@@ -56,6 +63,8 @@ def build_annotation_plan(state: dict) -> dict:
         "catalog_tissue": catalog.get("tissue"),
         "n_cell_types": len(catalog.get("cell_types") or []),
         "rag_excerpt": rag,
+        "paper_excerpt": lit.get("paper_excerpt") or "",
+        "paper_recs": lit.get("paper_recs") or [],
         "best_practices": bp,
         "marker_excerpt": markers,
         "code": code,
@@ -68,7 +77,13 @@ def build_annotation_plan(state: dict) -> dict:
     }
     llm = run_specialist(
         read_prompt("annotation"),
-        f"metadata={json.dumps(meta, ensure_ascii=False)}\nRAG:\n{rag}\nmarkers:\n{markers}",
+        (
+            f"metadata={json.dumps(meta, ensure_ascii=False)}\n"
+            f"RAG:\n{rag}\n"
+            f"文献段落:\n{lit.get('paper_excerpt') or '（无）'}\n"
+            f"markers:\n{markers}\n"
+            "请输出注释指令，并引用文献中的 marker / 参考映射最佳实践。"
+        ),
     )
     if llm:
         plan["instructions"] = llm

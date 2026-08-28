@@ -7,6 +7,8 @@ langchain-core==1.6.0
 pydantic==2.13.4
 PyYAML==6.0.3
 rank-bm25==0.2.2
+pymupdf==1.28.2
+pdfplumber==0.11.7
 pypdf==6.14.2
 python-dotenv==1.0.0
 pytest==9.1.1
