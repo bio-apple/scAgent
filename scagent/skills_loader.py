@@ -48,18 +48,14 @@ _ARCHIVE_DIRNAME = "_archive"
 _DEFAULT_CATALOG_LIMIT = 40
 
 _CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("spatial", ("spatial", "visium", "giotto", "squidpy", "xenium", "merfish", "deconv", "空转")),
     ("trajectory", ("trajectory", "pseudotime", "velocity", "lineage", "monocle", "palantir", "拟时序", "轨迹")),
     ("communication", ("communication", "cellchat", "nichenet", "liana", "ligand", "cellphonedb", "通讯", "配体")),
     ("annotation", ("annotat", "celltypist", "azimuth", "singler", "popv", "cell-type", "注释")),
     ("integration", ("batch", "harmony", "scvi", "integrat", "整合", "批次")),
-    ("atac", ("atac", "multiome", "signac", "archr", "chromatin", "cicero")),
     ("grn", ("grn", "scenic", "regulon", "arboreto", "gene-regulatory", "调控")),
-    ("perturb", ("perturb", "crispr", "crop-seq", "screen")),
-    ("qc", ("qc", "preprocess", "doublet", "normaliz", "质控", "预处理")),
+    ("qc", ("qc", "preprocess", "doublet", "normaliz", "质控", "预处理", "sparse", "io")),
     ("clustering", ("cluster", "leiden", "pca", "umap", "聚类")),
-    ("multimodal", ("multimodal", "cite-seq", "muon", "protein", "adt")),
-    ("repertoire", ("tcr", "bcr", "repertoire", "scirpy")),
+    ("atlas", ("atlas", "census", "mapping", "lamindb")),
 )
 
 _TOPIC_KEYWORDS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = tuple(
@@ -330,21 +326,15 @@ _PHASE_HINTS = {
         "celltypist",
         "popv",
         "trajectory",
-        "spatial",
         "cellchat",
         "communication",
-        "perturb",
-        "atac",
         "grn",
         "scenic",
         "velocity",
         "lineage",
         "azimuth",
-        "multimodal",
-        "cite",
-        "tcr",
-        "repertoire",
-        "deconv",
+        "atlas",
+        "census",
     ),
 }
 

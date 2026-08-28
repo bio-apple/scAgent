@@ -107,6 +107,41 @@ SKIP_SKILL_FILES = {
     "tooluniverse-single-cell/REDESIGN_SUMMARY.md",
 }
 
+# Product focus: scRNA-seq only — skip these modality/topic patterns on sync.
+_SKIP_NAME_PATTERNS = (
+    "spatial",
+    "imaging",
+    "scatac",
+    "atac-seq",
+    "multiome",
+    "multimodal",
+    "multi-omics",
+    "multiomics",
+    "proteomics",
+    "tcr",
+    "bcr",
+    "repertoire",
+    "perturb",
+    "crispr",
+    "visium",
+    "xenium",
+    "merfish",
+    "squidpy",
+)
+
+
+def _out_of_scrna_scope(name: str) -> bool:
+    low = (name or "").lower()
+    return any(p in low for p in _SKIP_NAME_PATTERNS)
+
+
+def _archived_folder_names(dest_root: Path) -> set[str]:
+    archive = dest_root / "_archive"
+    if not archive.is_dir():
+        return set()
+    return {p.name for p in archive.iterdir() if p.is_dir()}
+
+
 
 def _parse_name(text: str, fallback: str) -> str:
     m = _FRONTMATTER.match(text)
@@ -175,6 +210,11 @@ def sync_skills(
             dest_name in SKIP_SKILL_FOLDERS
             or row["folder_name"] in SKIP_SKILL_FOLDERS
             or skill_name in SKIP_SKILL_FOLDERS
+            or _out_of_scrna_scope(dest_name)
+            or _out_of_scrna_scope(row["folder_name"])
+            or _out_of_scrna_scope(skill_name)
+            or dest_name in _archived_folder_names(dest_root)
+            or row["folder_name"] in _archived_folder_names(dest_root)
         )
         if skip_folder:
             skipped += 1

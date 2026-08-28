@@ -1,7 +1,12 @@
 # Archived skills (not loaded by scAgent)
 
-Shell agents, broken CLI wrappers (missing .py), Omicverse tutorial mirrors, and non-core DB helpers.
+Out of scope for the default **scRNA-seq analysis** product focus:
+
+- Spatial transcriptomics / proteomics / imaging mass cytometry
+- scATAC / multiome / multimodal integration packs
+- TCR/BCR repertoire, CRISPR/perturb-seq screens
+- Shell agents and broken CLI wrappers (earlier archive)
+
+Active skills stay under `skills/*/SKILL.md` (~34 cookbooks: QC → cluster → annotate → integrate → trajectory / CellChat / SCENIC).
+
 Restore by moving a folder back to `skills/<name>/`.
-
-See `scagent/skills_loader.py` — only `skills/*/SKILL.md` one level deep is discovered; `_archive/` is ignored.
-

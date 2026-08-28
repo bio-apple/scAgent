@@ -1,6 +1,6 @@
 # Single-Cell RNA-seq Analysis Agent
 
-LangGraph agent for single-cell bioinformatics: **tissue-aware QC, execution review, auditable scripts**. **~75** active bundled skills (`skills/_archive/` holds unused shells); [`knowledge/`](README.md#knowledge-base) fused RAG + structured KB (CL, markers, pathways, disease signatures, tissue maps). Agents retrieve **parsed paper passages** (MinerU) and cite them in the report.
+LangGraph agent for single-cell bioinformatics: **tissue-aware QC, execution review, auditable scripts**. Focus: **scRNA-seq analysis** (~34 active skills). [`knowledge/`](README.md#knowledge-base) fused RAG + structured KB. Agents retrieve **parsed paper passages** (MinerU) and cite them in the report.
 
 ## Quick start
 
@@ -114,8 +114,8 @@ Planner / QC / Annotation / Interpretation call phase-aware `search_paper_knowle
 
 | Path | Role |
 |------|------|
-| `skills/*/SKILL.md` | Active cookbooks (~75); Planner recommends a lean **core** + topic matches |
-| `skills/_archive/` | Shell agents, broken CLI wrappers, Omicverse mirrors — **not loaded** |
+| `skills/*/SKILL.md` | Active **scRNA-seq** cookbooks (~34): QC → cluster → annotate → integrate → trajectory / CellChat / SCENIC |
+| `skills/_archive/` | Spatial / ATAC / imaging / TCR / perturb / shell agents — **not loaded** |
 | `knowledge/best_practices/` | Step decision SOPs (not the same as skills) |
 
 `python -m scagent skills` lists active skills. Restore an archived pack by moving it back under `skills/<name>/`.

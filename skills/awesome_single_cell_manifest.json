@@ -1835,8 +1835,9 @@
     "spatial-domains",
     "spatial-visualization"
   ],
-  "active_skills": 75,
-  "archived_skills": 24,
-  "note": "active = skills/*/SKILL.md; archived under skills/_archive (not loaded)",
-  "total_discovered": 75
+  "active_skills": 34,
+  "archived_skills": 65,
+  "note": "active = skills/*/SKILL.md; spatial/ATAC/imaging/TCR/perturb archived",
+  "total_discovered": 34,
+  "product_focus": "scRNA-seq"
 }
