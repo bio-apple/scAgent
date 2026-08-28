@@ -303,19 +303,27 @@ def retrieve_fused(
     hits = retrieve(q, collections=cols, boost_stems=names, top_k=top_k, cfg=cfg)
     kb_hits = []
     if want_kb:
-        kb_cols = ["marker_db", "cell_ontology", "tissue_reference"] if phase == "annotation" or include_markers else None
-        if phase == "interpret":
+        if phase == "qc":
+            kb_cols: list[str] | None = []
+        elif phase == "annotation" or include_markers:
+            kb_cols = ["marker_db", "cell_ontology", "tissue_reference"]
+        elif phase == "interpret":
             kb_cols = ["pathway", "disease_signature"]
-        kb_hits = lookup_structured(hint, collections=kb_cols, tissue=tissue, top_k=4)
-        for h in kb_hits:
-            h.setdefault("retrieval", "structured")
+        else:
+            kb_cols = None
+        if kb_cols is not None and not kb_cols:
+            kb_hits = []
+        else:
+            kb_hits = lookup_structured(hint, collections=kb_cols, tissue=tissue, top_k=4)
+            for h in kb_hits:
+                h.setdefault("retrieval", "structured")
     if not ensure_practices or not names:
         merged = kb_hits + hits
         want = top_k or int((cfg.get("rag") or {}).get("top_k") or 6)
         return _dedup_hits(merged, want)
     want = top_k or int((cfg.get("rag") or {}).get("top_k") or 6)
     covered = {_stem(h) for h in hits}
-    extras: list[dict] = list(kb_hits)
+    extras: list[dict] = []
     for name in names:
         if name.lower() in covered:
             continue
@@ -331,9 +339,9 @@ def retrieve_fused(
                 "retrieval": "practice_ensure",
             }
         )
-        if len(extras) >= 4:
+        if len(extras) >= 3:
             break
-    return extras + hits[: max(0, want - len(extras))]
+    return _dedup_hits(extras + kb_hits + hits, want)
 
 
 def format_hits(hits: list[dict]) -> str:
