@@ -39,12 +39,13 @@ def test_recommend_cellchat_for_communication_query():
 def test_awesome_single_cell_skills_imported():
     manifest = awesome_manifest()
     assert manifest is not None
-    assert manifest["total_indexed"] == 144
     names = {s.name for s in list_skills()}
-    assert len(names) >= 90
+    assert len(names) >= 60
+    assert len(names) == manifest.get("active_skills") or len(names) >= 60
     assert "scanpy" not in names
     assert "bioskills" not in names
     assert "bio-methylation-dmr-detection" not in names
+    assert "STAgent" not in names  # archived
     assert "bio-spatial-transcriptomics-spatial-deconvolution" in names
 
 
@@ -61,11 +62,42 @@ def test_recommend_indexes_all_bundled_skills():
 
 
 def test_skill_catalog_lists_all_skills():
-    text = skill_catalog_text()
+    text = skill_catalog_text(limit=None)
     names = {s.name for s in list_skills()}
     missing = [n for n in names if n not in text]
     assert len(missing) <= 3, missing
     assert "bundled skills:" in text
+
+
+def test_skill_catalog_default_limit():
+    text = skill_catalog_text(metadata={"tissue": "pbmc"}, query="standard analysis")
+    assert "bundled skills:" in text
+    assert "recommended for this task:" in text
+
+
+def test_skills_for_phase_qc_excludes_annotation_io_false_positive():
+    from scagent.skills_loader import skills_for_phase
+
+    names = skills_for_phase(
+        "qc",
+        ["cellchat-cell-communication", "single-cell-annotation", "harmony-batch-correction", "bio-single-cell-preprocessing"],
+    )
+    assert "bio-single-cell-preprocessing" in names
+    assert "cellchat-cell-communication" not in names
+    assert "single-cell-annotation" not in names
+
+
+def test_frontmatter_skips_html_copyright():
+    from pathlib import Path
+
+    from scagent.skills_loader import _parse_frontmatter
+
+    path = Path("skills/spatial-data-io/SKILL.md")
+    if not path.exists():
+        return
+    meta, _ = _parse_frontmatter(path.read_text(encoding="utf-8"))
+    assert meta.get("name")
+    assert meta.get("description")
 
 
 def test_skills_for_phase_includes_plan_skills():

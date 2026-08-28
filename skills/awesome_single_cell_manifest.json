@@ -1834,5 +1834,9 @@
     "spatial-deconvolution",
     "spatial-domains",
     "spatial-visualization"
-  ]
+  ],
+  "active_skills": 75,
+  "archived_skills": 24,
+  "note": "active = skills/*/SKILL.md; archived under skills/_archive (not loaded)",
+  "total_discovered": 75
 }

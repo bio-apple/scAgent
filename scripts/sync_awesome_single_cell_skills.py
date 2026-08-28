@@ -74,6 +74,32 @@ SKIP_SKILL_FOLDERS = {
     "scrna-qc",
     "single-cell-rna-qc",
     "cell-communication",
+
+    # Archived in skills/_archive (shell agents / broken CLI / omicverse mirrors / DBs).
+    "STAgent",
+    "SpatialAgent",
+    "compbioagent-explorer",
+    "scfoundation-model-agent",
+    "tme-immune-profiling-agent",
+    "universal-single-cell-annotator",
+    "diff-visualizer",
+    "scrna-orchestrator",
+    "scrna-embedding",
+    "nfcore-scrnaseq-wrapper",
+    "single-cell-preprocessing-with-omicverse",
+    "single-cell-clustering-and-batch-correction-with-omicverse",
+    "single-cell-annotation-skills-with-omicverse",
+    "single-cell-cellphonedb-communication-mapping",
+    "single2spatial-spatial-mapping",
+    "bulk-rna-seq-deconvolution-with-bulk2single",
+    "bulktrajblend-trajectory-interpolation",
+    "gget-genomic-databases",
+    "geniml",
+    "geo-database",
+    "bio-data-visualization-dimensionality-reduction-plots",
+    "rna-velocity-agent",
+    "Disease Progression Trajectory Analysis",
+    "Single-Cell Trajectory Inference",
 }
 
 SKIP_SKILL_FILES = {

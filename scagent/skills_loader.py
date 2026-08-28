@@ -1,3 +1,5 @@
+"""Discover and recommend bundled analysis skills under skills/*/SKILL.md."""
+
 from __future__ import annotations
 
 import json
@@ -28,7 +30,7 @@ _STOP = {
     "workflow",
 }
 
-# Always activated for a standard scRNA run.
+# Lean core for a standard scRNA run; topic skills (CellChat, census, …) added on demand.
 _CORE_SKILLS = (
     "anndata-data-structure",
     "scanpy-scrna-seq",
@@ -37,10 +39,13 @@ _CORE_SKILLS = (
     "single-cell-annotation-guide",
     "single-cell-annotation",
     "celltypist-cell-annotation",
-    "popv-cell-annotation",
-    "cellxgene-census",
-    "cellchat-cell-communication",
 )
+
+# Archived packs live under skills/_archive/ and are not discovered.
+_ARCHIVE_DIRNAME = "_archive"
+
+# Planner prompt: recommended first, then fill up to this many lines.
+_DEFAULT_CATALOG_LIMIT = 40
 
 _CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("spatial", ("spatial", "visium", "giotto", "squidpy", "xenium", "merfish", "deconv", "空转")),
@@ -71,7 +76,23 @@ class Skill:
     references: tuple[Path, ...]
 
 
+def _strip_leading_noise(text: str) -> str:
+    """Drop HTML comments / BOM so YAML frontmatter can be parsed."""
+    text = (text or "").lstrip("\ufeff")
+    while True:
+        s = text.lstrip()
+        if s.startswith("<!--"):
+            end = s.find("-->")
+            if end < 0:
+                break
+            text = s[end + 3 :]
+            continue
+        break
+    return text.lstrip()
+
+
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    text = _strip_leading_noise(text)
     m = _FRONTMATTER.match(text)
     if not m:
         return {}, text
@@ -95,6 +116,8 @@ def list_skills(root: Path | None = None) -> list[Skill]:
     if not base.exists():
         return skills
     for skill_md in sorted(base.glob("*/SKILL.md")):
+        if skill_md.parent.name.startswith("_"):
+            continue
         text = skill_md.read_text(encoding="utf-8")
         meta, body = _parse_frontmatter(text)
         name = meta.get("name") or skill_md.parent.name
@@ -172,7 +195,7 @@ def _skill_score(skill: Skill, topic: str) -> int:
 
 
 def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
-    """Score every bundled skill against the task; always keep SciAgent core."""
+    """Score bundled skills against the task; always keep lean SciAgent core."""
     skills = list_skills()
     if not skills:
         return []
@@ -199,7 +222,7 @@ def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
     if language != "python":
         add("scanpy-scrna-seq", "Single-Cell RNA-seq Core Analysis (Seurat)")
 
-    topic = _topic_query(metadata, metadata.get("user_query"))
+    topic = _topic_query(metadata, metadata.get("user_query") or metadata.get("task"))
     ranked = sorted((_skill_score(s, topic), s.name) for s in skills)
     for score, name in reversed(ranked):
         if score >= 6:
@@ -209,37 +232,14 @@ def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
     return selected
 
 
-def _ranked_skills(metadata: dict | None = None, query: str | None = None) -> list[Skill]:
-    skills = list_skills()
-    if not skills:
-        return []
-    topic = _topic_query(metadata, query)
-    recommended = set(recommend_skills(metadata or {}, language=str((metadata or {}).get("language") or "python")))
-    ranked: list[Skill] = []
-    seen: set[str] = set()
-
-    def push(skill: Skill) -> None:
-        if skill.name in seen:
-            return
-        seen.add(skill.name)
-        ranked.append(skill)
-
-    for skill in skills:
-        if skill.name in recommended:
-            push(skill)
-    for skill in sorted(skills, key=lambda s: -_skill_score(s, topic)):
-        push(skill)
-    return ranked
-
-
 def skill_catalog_text(
     root: Path | None = None,
     metadata: dict | None = None,
     query: str | None = None,
     *,
-    limit: int | None = None,
+    limit: int | None = _DEFAULT_CATALOG_LIMIT,
 ) -> str:
-    """Full catalog grouped by topic so the planner can see every bundled skill."""
+    """Catalog for planner prompts: recommended first, then fill up to limit."""
     skills = list_skills(root) if root else list_skills()
     if not skills:
         return "(no skills found)"
@@ -249,27 +249,37 @@ def skill_catalog_text(
         md.setdefault("task", query)
     rec_list = recommend_skills(md) if (metadata or query) else []
     recommended = set(rec_list)
-    grouped: dict[str, list[Skill]] = defaultdict(list)
-    for skill in skills:
-        grouped[skill_category(skill)].append(skill)
-    order = [c for c, _ in _CATEGORIES] + ["other"]
-    lines = [f"bundled skills: {len(skills)}"]
+    by_name = {s.name: s for s in skills}
+    topic = _topic_query(md, query)
+    lines = [f"bundled skills: {len(skills)} (showing up to {limit or len(skills)})"]
     if rec_list:
         lines.append("recommended for this task: " + ", ".join(rec_list))
+
+    ordered: list[Skill] = []
+    seen: set[str] = set()
+    for name in rec_list:
+        if name in by_name and name not in seen:
+            ordered.append(by_name[name])
+            seen.add(name)
+    for skill in sorted(skills, key=lambda s: -_skill_score(s, topic)):
+        if skill.name not in seen:
+            ordered.append(skill)
+            seen.add(skill.name)
+
     shown = 0
-    for cat in order:
-        bucket = grouped.get(cat) or []
-        if not bucket:
-            continue
-        lines.append(f"## {cat}")
-        for skill in bucket:
-            if limit is not None and shown >= limit:
-                remaining = len(skills) - shown
-                lines.append(f"... 另有 {remaining} 个 skill（`python -m scagent skills`）")
-                return "\n".join(lines)
-            mark = "*" if skill.name in recommended else "-"
-            lines.append(f"{mark} {skill.name}: {_truncate(skill.description, 100)}")
-            shown += 1
+    last_cat = None
+    for skill in ordered:
+        if limit is not None and shown >= limit:
+            remaining = len(skills) - shown
+            lines.append(f"... +{remaining} more (`python -m scagent skills`)")
+            break
+        cat = skill_category(skill)
+        if cat != last_cat:
+            lines.append(f"## {cat}")
+            last_cat = cat
+        mark = "*" if skill.name in recommended else "-"
+        lines.append(f"{mark} {skill.name}: {_truncate(skill.description or skill.name, 100)}")
+        shown += 1
     return "\n".join(lines)
 
 
@@ -308,8 +318,9 @@ PHASE_SKILLS = {
     ],
 }
 
+# Word-boundary style hints (avoid bare "io" matching "annotation" / "communication").
 _PHASE_HINTS = {
-    "qc": ("qc", "preprocess", "anndata", "scanpy", "doublet", "data-io", "sparse", "normaliz", "io"),
+    "qc": ("qc", "preprocess", "anndata", "scanpy", "doublet", "data-io", "sparse", "normaliz", "filter"),
     "downstream": (
         "cluster",
         "annotat",
@@ -338,8 +349,19 @@ _PHASE_HINTS = {
 }
 
 
+def _hint_match(name: str, hints: tuple[str, ...]) -> bool:
+    low = name.lower()
+    for h in hints:
+        if len(h) <= 3:
+            if re.search(rf"(^|[-_]){re.escape(h)}($|[-_])", low):
+                return True
+        elif h in low:
+            return True
+    return False
+
+
 def skills_for_phase(phase: str, plan_skills: list[str] | None = None, *, max_extra: int = 6) -> list[str]:
-    """Core phase skills plus task-selected skills from the full catalog."""
+    """Core phase skills plus task-selected skills from the catalog."""
     available = {s.name for s in list_skills()}
     wanted = [n for n in (PHASE_SKILLS.get(phase) or []) if n in available]
     hints = _PHASE_HINTS.get(phase) or ()
@@ -347,10 +369,7 @@ def skills_for_phase(phase: str, plan_skills: list[str] | None = None, *, max_ex
     for name in plan_skills or []:
         if name in wanted or name in extra:
             continue
-        low = name.lower()
-        if phase == "qc" and not any(h in low for h in hints):
-            continue
-        if phase == "downstream" and not any(h in low for h in hints):
+        if phase in {"qc", "downstream"} and not _hint_match(name, hints):
             continue
         extra.append(name)
         if len(extra) >= max_extra:
@@ -358,5 +377,4 @@ def skills_for_phase(phase: str, plan_skills: list[str] | None = None, *, max_ex
     return wanted + extra
 
 
-# Keep a stable import for tests that want the repo root.
 SKILLS_ROOT = REPO_ROOT / "skills"
