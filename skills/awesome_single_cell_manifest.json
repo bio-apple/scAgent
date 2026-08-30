@@ -13,6 +13,45 @@
     "visualization",
     "report_generation"
   ],
-  "note": "one skill = one scientific task; granular packs under skills/_archive/legacy_granular",
-  "archived_legacy_granular": 34
+  "note": "Ten scientific-task skills under skills/*/SKILL.md. scRNA recipes from skills/_archive were fused into these task skills; ATAC/spatial/multiome/perturb/splicing remain archived only.",
+  "archived_legacy_granular": true,
+  "fusion": {
+    "dataset_loader": [
+      "nfcore-scrnaseq-wrapper"
+    ],
+    "qc_preprocessing": [
+      "single-cell-preprocessing-with-omicverse",
+      "scrna-orchestrator"
+    ],
+    "integration_batch": [
+      "scrna-embedding",
+      "single-cell-clustering-and-batch-correction-with-omicverse"
+    ],
+    "clustering_embedding": [
+      "scrna-orchestrator",
+      "single-cell-clustering-and-batch-correction-with-omicverse"
+    ],
+    "cell_annotation": [
+      "single-cell-annotation-skills-with-omicverse",
+      "universal-single-cell-annotator"
+    ],
+    "deg_pathway": [
+      "scrna-orchestrator"
+    ],
+    "trajectory": [
+      "Single-Cell Trajectory Inference"
+    ],
+    "cell_communication": [
+      "single-cell-cellphonedb-communication-mapping",
+      "bio-single-cell-metabolite-communication"
+    ],
+    "visualization": [
+      "scrna-orchestrator"
+    ],
+    "report_generation": [
+      "scrna-orchestrator",
+      "scrna-embedding",
+      "nfcore-scrnaseq-wrapper"
+    ]
+  }
 }

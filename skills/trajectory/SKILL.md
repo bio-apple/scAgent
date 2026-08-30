@@ -8,24 +8,47 @@ description: "Pseudotime / lineage inference (PAGA, DPT, Palantir, Monocle3, scV
 ## Goal
 Infer continuous structure or differentiation axes when biology is not purely discrete clusters.
 
-## Methods
-| Tool | Role |
-|------|------|
-| PAGA | Graph abstraction / continuity check |
-| DPT / Palantir | Pseudotime on continuous manifolds |
-| Monocle3 | R trajectory (when R path) |
-| scVelo | RNA velocity only if spliced/unspliced present |
+## When / when not
+- Use: differentiation, disease progression continua, ≥~200 cells, clusters already defined
+- Skip: clearly discrete resting populations (e.g. resting PBMC panels) — do not force a fate axis
+
+## Scope ladder
+1. **Core**: PAGA + diffusion pseudotime (DPT) — needs root / early cell type
+2. **+ Velocity**: scVelo only if `spliced`/`unspliced` layers exist (dynamical → fallback stochastic)
+3. **+ Fate**: CellRank terminal probabilities (optional)
+4. **R path**: Monocle3 / Slingshot when operating in Seurat
+
+## Recipes
+
+### Core (Python)
+```python
+sc.tl.paga(adata, groups="leiden")  # or cell type key
+sc.pl.paga(adata, threshold=0.03)
+# Set root: adata.uns['iroot'] = np.flatnonzero(adata.obs['cell_type'] == root)[0]
+sc.tl.diffmap(adata)
+sc.tl.dpt(adata)
+```
+
+### Velocity (only with layers)
+```python
+import scvelo as scv
+scv.pp.moments(adata); scv.tl.velocity(adata, mode="dynamical")  # fallback: stochastic
+scv.tl.velocity_graph(adata); scv.pl.velocity_embedding_stream(adata, basis="umap")
+```
+
+### Optional
+- CellRank fate probabilities → `fate_probabilities.csv`
+- StaVIA / VIA when user requests graph-based alternatives
+- Gene–pseudotime trends + FDR for driver genes
 
 ## Outputs
-- Pseudotime values
-- Trajectory embedding / PAGA graph
-- Gene-vs-pseudotime trends for key genes
-- Confidence / verdict (discrete vs continuous)
+- Pseudotime values; PAGA graph; gene-vs-pseudotime trends; velocity streams if run; confidence note (discrete vs continuous)
 
 ## Gates
-- Do **not** force a fate axis on clearly discrete populations.
-- Velocity without layers is invalid — skip and say so.
+- Do **not** force trajectory on discrete populations.
+- Velocity without spliced/unspliced → skip and state why.
+- Ask for input object + analysis scope (core / +velocity / +CellRank) before parameter deep-dives.
 
 ## Related
-- `knowledge/best_practices/trajectory.md`
-
+- Upstream: `clustering_embedding`; velocity only with spliced/unspliced layers
+- Folded from: Single-Cell Trajectory Inference archive, StaVIA notes
