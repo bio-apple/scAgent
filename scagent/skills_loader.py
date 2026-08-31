@@ -172,7 +172,13 @@ def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
 
     n_samples = int(metadata.get("n_samples") or 1)
     need_batch = bool(metadata.get("need_batch_correction")) or n_samples > 1
-    if need_batch or metadata.get("integrator") or "harmony" in topic or "integrat" in topic:
+    # Sample≡condition collinearity: skip integration skill (over-correction risk).
+    confounded = bool(metadata.get("batch_condition_confounded"))
+    want_integration = (
+        (need_batch or metadata.get("integrator") or "harmony" in topic or "integrat" in topic)
+        and not confounded
+    )
+    if want_integration:
         add("integration_batch")
 
     if any(k in topic for k in ("deg", "differen", "marker", "gsea", "pathway", "pseudobulk", "差异", "通路")) or any(

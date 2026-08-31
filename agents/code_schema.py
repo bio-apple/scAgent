@@ -14,7 +14,8 @@ CODE_PREREQS: dict[str, tuple[str, ...]] = {
     "umap": ("neighbors",),
     "leiden": ("neighbors",),
     "cluster_deg": ("pca", "leiden", "umap"),
-    "pseudobulk_deg": ("leiden", "umap"),
+    # Pseudobulk condition DE must follow cell-type labels (not raw Leiden alone).
+    "pseudobulk_deg": ("leiden", "umap", "annotate"),
     "annotate": ("leiden",),
     "trajectory": ("pca", "umap", "leiden"),
 }
@@ -45,6 +46,7 @@ _PY_NAME_CALLS = {
     "run_trajectory_phase": "trajectory",
     "pseudobulk_de": "pseudobulk_deg",
     "fuse_annotation": "annotate",
+    "ensemble_cell_annotation": "annotate",
     "rank_genes": "cluster_deg",
 }
 
@@ -175,7 +177,7 @@ def validate_script(
         if step in {"cluster_deg", "pseudobulk_deg"}:
             _add(
                 records,
-                f"DE ({step}) 出现在降维/聚类之前或缺少前提 {missing}；须先 PCA/neighbors + Leiden/UMAP",
+                f"DE ({step}) 出现在降维/聚类之前或缺少前提 {missing}；须先 PCA/neighbors + Leiden/UMAP（pseudobulk_deg 还须 annotate/fuse_annotation）",
                 id="schema.dag_de",
             )
         elif step == "trajectory":

@@ -36,7 +36,7 @@ flowchart LR
 | Writer | Report + **Literature-based best practices** section |
 | Tool Router | Seurat/Harmony/Azimuth first; Scanpy fallback |
 
-**Policies:** `n_replicates≥2` → mandatory pseudobulk + DESeq2/edgeR; UMAP mixing ≠ integration success; `--resume` via LangGraph + `.cache/snapshots/`.
+**Policies:** `condition_key` + `n_replicates≥2` → mandatory sample-level pseudobulk + DESeq2/edgeR (exploratory DEG intent alone does not hard-fail); sample≡condition collinearity → skip integration; unknown tissue → no silent PBMC marker fallback; UMAP mixing ≠ integration success; `--resume` via LangGraph + `.cache/snapshots/`.
 
 ## Data & batch
 
@@ -52,7 +52,7 @@ Auto integration when ≥2 batches and sample ≠ condition 1:1: **Harmony** (de
 |----------------|-------------|
 | `run "task" --data … --tissue …` | Main pipeline |
 | `--dry-run` / `--execute` | Scripts only / Jupyter run |
-| `--language r_first\|python\|r` | R-first / Scanpy / Rmd export only |
+| `--language r_first\|python\|r` | `r_first`: prefer Seurat/Harmony/Azimuth when R is available; `python`: Scanpy path; `r`: export Rmd only (no R kernel execute) |
 | `--interrupt` + `confirm mt\|resolution` | HITL checkpoints |
 | `--condition-key` | Group pseudobulk DE |
 | `--integrator`, `--ambient`, `--remove-doublets`, `--deg-engine`, `--qc-method` | See `run --help` |

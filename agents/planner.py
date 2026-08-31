@@ -97,13 +97,17 @@ def build_plan(state: dict) -> dict:
         meta.get("tissue"), state.get("ambient") or (cfg.get("modules") or {}).get("ambient")
     )
     intent = {} if r_degraded else parse_intent(state.get("user_query"), cfg)
-    needs_pb = False if r_degraded else bool(intent.get("condition_comparison") or "deg" in (intent.get("intents") or []))
+    # Exploratory DEG intent alone must NOT hard-require pseudobulk (Reviewer would false-fail).
+    wants_deg = False if r_degraded else bool(
+        intent.get("condition_comparison") or "deg" in (intent.get("intents") or [])
+    )
     if state.get("condition_key"):
         meta["condition_key"] = state["condition_key"]
-        needs_pb = True
+        wants_deg = True
     if force_pseudobulk_de(meta):
         meta["force_pseudobulk_de"] = True
-        needs_pb = True
+    # Hard gate only when condition_key + n_replicates≥2 (force_pseudobulk_de).
+    needs_pb = False if r_degraded else bool(force_pseudobulk_de(meta))
     ct_model = None if r_degraded else choose_celltypist_model(meta.get("tissue"), meta.get("species"))
     resolution = state.get("resolution")
     if resolution is None:
@@ -112,7 +116,7 @@ def build_plan(state: dict) -> dict:
         route = ["plan_only"]
     else:
         intents = list(intent.get("intents") or ["qc", "clustering", "annotation"])
-        if needs_pb and "deg" not in intents:
+        if (wants_deg or needs_pb) and "deg" not in intents:
             intents.append("deg")
         from scagent.trajectory import should_plan_trajectory
 
@@ -150,7 +154,7 @@ def build_plan(state: dict) -> dict:
         else format_hits(
             retrieve_fused(
                 f"{state.get('user_query') or ''} {meta.get('platform')} {meta.get('tissue')} "
-                "scRNA-seq integration Harmony scVI",
+                f"{' '.join(route)} scRNA-seq",
                 route=route,
                 intents=list((intent or {}).get("intents") or []),
                 user_query=state.get("user_query"),

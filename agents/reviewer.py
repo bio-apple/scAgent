@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from agents.code_schema import validate_script
+from scagent.deg_methods import force_pseudobulk_de
 from agents.common import read_prompt, run_specialist
 from agents.markers import choose_celltypist_model
 from agents.templates import LOCKED_END, LOCKED_START
@@ -99,7 +100,8 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
             _add(records, "注释缺少 dual validation（≥2 阳性 + ≥1 阴性 marker）", id="down.dual")
         if "cell_type_l1" not in low and "lineage" not in low:
             _add(records, "注释缺少层级字段（cell_type_l1 / lineage）", id="down.lineage")
-        if metadata.get("needs_pseudobulk"):
+        # Hard-fail only when replicates≥2 + condition (force_pseudobulk_de), not exploratory DEG intent.
+        if force_pseudobulk_de(metadata) or metadata.get("force_pseudobulk_de"):
             if not has_pseudobulk_impl or not (has_pseudobulk_note or "fdr" in low):
                 _add(records, "组间比较必须 sample-level pseudobulk + FDR，不能只用 cell-level Wilcoxon", id="down.pseudobulk")
         elif "rank_genes_groups" in low or "rank_genes(" in low:
@@ -369,7 +371,7 @@ def publication_review(state: dict) -> dict:
     else:
         items.append(_item("markers", "fail", "marker 双验证不完整"))
 
-    need_pb = bool(plan.get("needs_pseudobulk") or meta.get("needs_pseudobulk"))
+    need_pb = bool(force_pseudobulk_de(meta, plan) or plan.get("force_pseudobulk_de") or meta.get("force_pseudobulk_de"))
     eng = str(mets.get("deg_engine") or "")
     cv_n = mets.get("deg_n_overlap")
     marker_n = mets.get("marker_n_overlap")

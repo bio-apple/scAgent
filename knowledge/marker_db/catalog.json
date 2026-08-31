@@ -3,43 +3,743 @@
   "note": "Offline subset for dual-positive + negative validation. Not a dump of either database.",
   "tissues": {
     "pbmc": [
-      {"name": "Immune", "cl_id": "CL:0000738", "source": "CellMarker 2.0", "lineage": ["Immune"], "positive": ["PTPRC", "HLA-DRA"], "negative": ["EPCAM"]},
-      {"name": "T cell", "cl_id": "CL:0000084", "source": "CellMarker 2.0", "lineage": ["Immune", "T cell"], "positive": ["CD3D", "CD3E"], "negative": ["MS4A1"]},
-      {"name": "CD4 T", "cl_id": "CL:0000624", "source": "CellMarker 2.0", "lineage": ["Immune", "T cell", "CD4 T"], "positive": ["CD4", "IL7R"], "negative": ["CD8A"]},
-      {"name": "CD8 T", "cl_id": "CL:0000625", "source": "CellMarker 2.0", "lineage": ["Immune", "T cell", "CD8 T"], "positive": ["CD8A", "CD8B"], "negative": ["CD4"]},
-      {"name": "CD8 Tex", "cl_id": null, "source": "PanglaoDB / Wherry 2011", "lineage": ["Immune", "T cell", "CD8 T", "CD8 Tex"], "positive": ["CD8A", "PDCD1", "HAVCR2"], "negative": ["IL7R"]},
-      {"name": "NK", "cl_id": "CL:0000623", "source": "CellMarker 2.0", "lineage": ["Immune", "NK"], "positive": ["NKG7", "GNLY"], "negative": ["CD3D"]},
-      {"name": "B cell", "cl_id": "CL:0000236", "source": "CellMarker 2.0", "lineage": ["Immune", "B cell"], "positive": ["MS4A1", "CD79A"], "negative": ["CD3D"]},
-      {"name": "Myeloid", "cl_id": "CL:0000763", "source": "CellMarker 2.0", "lineage": ["Immune", "Myeloid"], "positive": ["LYZ", "CST3"], "negative": ["CD3D"]},
-      {"name": "CD14 monocyte", "cl_id": "CL:0000576", "source": "PanglaoDB", "lineage": ["Immune", "Myeloid", "CD14 monocyte"], "positive": ["CD14", "LYZ"], "negative": ["FCGR3A"]},
-      {"name": "CD16 monocyte", "cl_id": "CL:0002396", "source": "PanglaoDB", "lineage": ["Immune", "Myeloid", "CD16 monocyte"], "positive": ["FCGR3A", "MS4A7"], "negative": ["CD14"]},
-      {"name": "cDC", "cl_id": "CL:0000451", "source": "CellMarker 2.0", "lineage": ["Immune", "Myeloid", "cDC"], "positive": ["FCER1A", "CST3"], "negative": ["CD14"]},
-      {"name": "pDC", "cl_id": "CL:0000784", "source": "CellMarker 2.0", "lineage": ["Immune", "Myeloid", "pDC"], "positive": ["IL3RA", "CLEC4C"], "negative": ["MS4A1"]},
-      {"name": "Platelet", "cl_id": "CL:0000233", "source": "PanglaoDB", "lineage": ["Platelet"], "positive": ["PPBP", "PF4"], "negative": ["PTPRC"]}
+      {
+        "name": "Immune",
+        "cl_id": "CL:0000738",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune"
+        ],
+        "positive": [
+          "PTPRC",
+          "HLA-DRA"
+        ],
+        "negative": [
+          "EPCAM"
+        ]
+      },
+      {
+        "name": "T cell",
+        "cl_id": "CL:0000084",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "T cell"
+        ],
+        "positive": [
+          "CD3D",
+          "CD3E"
+        ],
+        "negative": [
+          "MS4A1"
+        ]
+      },
+      {
+        "name": "CD4 T",
+        "cl_id": "CL:0000624",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "T cell",
+          "CD4 T"
+        ],
+        "positive": [
+          "CD4",
+          "IL7R"
+        ],
+        "negative": [
+          "CD8A"
+        ]
+      },
+      {
+        "name": "CD8 T",
+        "cl_id": "CL:0000625",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "T cell",
+          "CD8 T"
+        ],
+        "positive": [
+          "CD8A",
+          "CD8B"
+        ],
+        "negative": [
+          "CD4"
+        ]
+      },
+      {
+        "name": "CD8 Tex",
+        "cl_id": null,
+        "source": "PanglaoDB / Wherry 2011",
+        "lineage": [
+          "Immune",
+          "T cell",
+          "CD8 T",
+          "CD8 Tex"
+        ],
+        "positive": [
+          "CD8A",
+          "PDCD1",
+          "HAVCR2"
+        ],
+        "negative": [
+          "IL7R"
+        ]
+      },
+      {
+        "name": "NK",
+        "cl_id": "CL:0000623",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "NK"
+        ],
+        "positive": [
+          "NKG7",
+          "GNLY"
+        ],
+        "negative": [
+          "CD3D"
+        ]
+      },
+      {
+        "name": "B cell",
+        "cl_id": "CL:0000236",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "B cell"
+        ],
+        "positive": [
+          "MS4A1",
+          "CD79A"
+        ],
+        "negative": [
+          "CD3D"
+        ]
+      },
+      {
+        "name": "Myeloid",
+        "cl_id": "CL:0000763",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "Myeloid"
+        ],
+        "positive": [
+          "LYZ",
+          "CST3"
+        ],
+        "negative": [
+          "CD3D"
+        ]
+      },
+      {
+        "name": "CD14 monocyte",
+        "cl_id": "CL:0000576",
+        "source": "PanglaoDB",
+        "lineage": [
+          "Immune",
+          "Myeloid",
+          "CD14 monocyte"
+        ],
+        "positive": [
+          "CD14",
+          "LYZ"
+        ],
+        "negative": [
+          "FCGR3A"
+        ]
+      },
+      {
+        "name": "CD16 monocyte",
+        "cl_id": "CL:0002396",
+        "source": "PanglaoDB",
+        "lineage": [
+          "Immune",
+          "Myeloid",
+          "CD16 monocyte"
+        ],
+        "positive": [
+          "FCGR3A",
+          "MS4A7"
+        ],
+        "negative": [
+          "CD14"
+        ]
+      },
+      {
+        "name": "cDC",
+        "cl_id": "CL:0000451",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "Myeloid",
+          "cDC"
+        ],
+        "positive": [
+          "FCER1A",
+          "CST3"
+        ],
+        "negative": [
+          "CD14"
+        ]
+      },
+      {
+        "name": "pDC",
+        "cl_id": "CL:0000784",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "Myeloid",
+          "pDC"
+        ],
+        "positive": [
+          "IL3RA",
+          "CLEC4C"
+        ],
+        "negative": [
+          "MS4A1"
+        ]
+      },
+      {
+        "name": "Platelet",
+        "cl_id": "CL:0000233",
+        "source": "PanglaoDB",
+        "lineage": [
+          "Platelet"
+        ],
+        "positive": [
+          "PPBP",
+          "PF4"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      }
     ],
     "brain": [
-      {"name": "Neural", "cl_id": "CL:0002319", "source": "PanglaoDB", "lineage": ["Neural"], "positive": ["SOX2", "SLC1A3"], "negative": ["PTPRC"]},
-      {"name": "Neuron", "cl_id": "CL:0000540", "source": "PanglaoDB", "lineage": ["Neural", "Neuron"], "positive": ["RBFOX3", "SNAP25"], "negative": ["AQP4"]},
-      {"name": "Astrocyte", "cl_id": "CL:0000127", "source": "PanglaoDB", "lineage": ["Neural", "Astrocyte"], "positive": ["AQP4", "GFAP"], "negative": ["MBP"]},
-      {"name": "Oligodendrocyte", "cl_id": "CL:0000128", "source": "PanglaoDB", "lineage": ["Neural", "Oligodendrocyte"], "positive": ["MBP", "PLP1"], "negative": ["AQP4"]},
-      {"name": "Microglia", "cl_id": "CL:0000129", "source": "CellMarker 2.0", "lineage": ["Immune", "Microglia"], "positive": ["CX3CR1", "P2RY12"], "negative": ["GFAP"]}
+      {
+        "name": "Neural",
+        "cl_id": "CL:0002319",
+        "source": "PanglaoDB",
+        "lineage": [
+          "Neural"
+        ],
+        "positive": [
+          "SOX2",
+          "SLC1A3"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "Neuron",
+        "cl_id": "CL:0000540",
+        "source": "PanglaoDB",
+        "lineage": [
+          "Neural",
+          "Neuron"
+        ],
+        "positive": [
+          "RBFOX3",
+          "SNAP25"
+        ],
+        "negative": [
+          "AQP4"
+        ]
+      },
+      {
+        "name": "Astrocyte",
+        "cl_id": "CL:0000127",
+        "source": "PanglaoDB",
+        "lineage": [
+          "Neural",
+          "Astrocyte"
+        ],
+        "positive": [
+          "AQP4",
+          "GFAP"
+        ],
+        "negative": [
+          "MBP"
+        ]
+      },
+      {
+        "name": "Oligodendrocyte",
+        "cl_id": "CL:0000128",
+        "source": "PanglaoDB",
+        "lineage": [
+          "Neural",
+          "Oligodendrocyte"
+        ],
+        "positive": [
+          "MBP",
+          "PLP1"
+        ],
+        "negative": [
+          "AQP4"
+        ]
+      },
+      {
+        "name": "Microglia",
+        "cl_id": "CL:0000129",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "Microglia"
+        ],
+        "positive": [
+          "CX3CR1",
+          "P2RY12"
+        ],
+        "negative": [
+          "GFAP"
+        ]
+      }
     ],
     "liver": [
-      {"name": "Parenchyma", "cl_id": "CL:0000181", "source": "Human Cell Atlas", "lineage": ["Parenchyma"], "positive": ["ALB", "APOA1"], "negative": ["PTPRC"]},
-      {"name": "Hepatocyte", "cl_id": "CL:0000182", "source": "Human Cell Atlas", "lineage": ["Parenchyma", "Hepatocyte"], "positive": ["ALB", "APOA1"], "negative": ["PTPRC"]},
-      {"name": "Kupffer", "cl_id": "CL:0000091", "source": "CellMarker 2.0", "lineage": ["Immune", "Kupffer"], "positive": ["CD68", "MARCO"], "negative": ["ALB"]},
-      {"name": "Endothelial", "cl_id": "CL:0000115", "source": "Human Cell Atlas", "lineage": ["Stroma", "Endothelial"], "positive": ["PECAM1", "VWF"], "negative": ["ALB"]}
+      {
+        "name": "Parenchyma",
+        "cl_id": "CL:0000181",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Parenchyma"
+        ],
+        "positive": [
+          "ALB",
+          "APOA1"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "Hepatocyte",
+        "cl_id": "CL:0000182",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Parenchyma",
+          "Hepatocyte"
+        ],
+        "positive": [
+          "ALB",
+          "APOA1"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "Kupffer",
+        "cl_id": "CL:0000091",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "Kupffer"
+        ],
+        "positive": [
+          "CD68",
+          "MARCO"
+        ],
+        "negative": [
+          "ALB"
+        ]
+      },
+      {
+        "name": "Endothelial",
+        "cl_id": "CL:0000115",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Stroma",
+          "Endothelial"
+        ],
+        "positive": [
+          "PECAM1",
+          "VWF"
+        ],
+        "negative": [
+          "ALB"
+        ]
+      }
     ],
     "kidney": [
-      {"name": "Epithelium", "cl_id": "CL:0000066", "source": "Human Cell Atlas", "lineage": ["Epithelium"], "positive": ["EPCAM", "KRT8"], "negative": ["PTPRC"]},
-      {"name": "PT", "cl_id": "CL:0002306", "source": "Human Cell Atlas", "lineage": ["Epithelium", "PT"], "positive": ["CUBN", "LRP2"], "negative": ["UMOD"]},
-      {"name": "TAL", "cl_id": "CL:1001106", "source": "Human Cell Atlas", "lineage": ["Epithelium", "TAL"], "positive": ["UMOD", "SLC12A1"], "negative": ["CUBN"]},
-      {"name": "Podocyte", "cl_id": "CL:0000653", "source": "Human Cell Atlas", "lineage": ["Epithelium", "Podocyte"], "positive": ["NPHS1", "NPHS2"], "negative": ["UMOD"]}
+      {
+        "name": "Epithelium",
+        "cl_id": "CL:0000066",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Epithelium"
+        ],
+        "positive": [
+          "EPCAM",
+          "KRT8"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "PT",
+        "cl_id": "CL:0002306",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Epithelium",
+          "PT"
+        ],
+        "positive": [
+          "CUBN",
+          "LRP2"
+        ],
+        "negative": [
+          "UMOD"
+        ]
+      },
+      {
+        "name": "TAL",
+        "cl_id": "CL:1001106",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Epithelium",
+          "TAL"
+        ],
+        "positive": [
+          "UMOD",
+          "SLC12A1"
+        ],
+        "negative": [
+          "CUBN"
+        ]
+      },
+      {
+        "name": "Podocyte",
+        "cl_id": "CL:0000653",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Epithelium",
+          "Podocyte"
+        ],
+        "positive": [
+          "NPHS1",
+          "NPHS2"
+        ],
+        "negative": [
+          "UMOD"
+        ]
+      }
     ],
     "heart": [
-      {"name": "Cardiomyocyte", "cl_id": "CL:0000746", "source": "Human Cell Atlas", "lineage": ["Parenchyma", "Cardiomyocyte"], "positive": ["TNNT2", "MYH7"], "negative": ["PTPRC"]},
-      {"name": "Fibroblast", "cl_id": "CL:0000057", "source": "Human Cell Atlas", "lineage": ["Stroma", "Fibroblast"], "positive": ["DCN", "COL1A1"], "negative": ["TNNT2"]},
-      {"name": "Endothelial", "cl_id": "CL:0000115", "source": "Human Cell Atlas", "lineage": ["Stroma", "Endothelial"], "positive": ["PECAM1", "VWF"], "negative": ["TNNT2"]}
+      {
+        "name": "Cardiomyocyte",
+        "cl_id": "CL:0000746",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Parenchyma",
+          "Cardiomyocyte"
+        ],
+        "positive": [
+          "TNNT2",
+          "MYH7"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "Fibroblast",
+        "cl_id": "CL:0000057",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Stroma",
+          "Fibroblast"
+        ],
+        "positive": [
+          "DCN",
+          "COL1A1"
+        ],
+        "negative": [
+          "TNNT2"
+        ]
+      },
+      {
+        "name": "Endothelial",
+        "cl_id": "CL:0000115",
+        "source": "Human Cell Atlas",
+        "lineage": [
+          "Stroma",
+          "Endothelial"
+        ],
+        "positive": [
+          "PECAM1",
+          "VWF"
+        ],
+        "negative": [
+          "TNNT2"
+        ]
+      }
+    ],
+    "lung": [
+      {
+        "name": "Epithelial",
+        "cl_id": "CL:0000066",
+        "source": "Human Lung Cell Atlas",
+        "lineage": [
+          "Epithelial"
+        ],
+        "positive": [
+          "EPCAM",
+          "KRT8"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "AT2",
+        "cl_id": "CL:0002063",
+        "source": "Human Lung Cell Atlas",
+        "lineage": [
+          "Epithelial",
+          "AT2"
+        ],
+        "positive": [
+          "SFTPC",
+          "SFTPB"
+        ],
+        "negative": [
+          "AGER"
+        ]
+      },
+      {
+        "name": "AT1",
+        "cl_id": "CL:0002062",
+        "source": "Human Lung Cell Atlas",
+        "lineage": [
+          "Epithelial",
+          "AT1"
+        ],
+        "positive": [
+          "AGER",
+          "RTKN2"
+        ],
+        "negative": [
+          "SFTPC"
+        ]
+      },
+      {
+        "name": "Club",
+        "cl_id": "CL:0000158",
+        "source": "Human Lung Cell Atlas",
+        "lineage": [
+          "Epithelial",
+          "Club"
+        ],
+        "positive": [
+          "SCGB1A1",
+          "SCGB3A2"
+        ],
+        "negative": [
+          "SFTPC"
+        ]
+      },
+      {
+        "name": "Alveolar macrophage",
+        "cl_id": "CL:0000583",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "Alveolar macrophage"
+        ],
+        "positive": [
+          "MARCO",
+          "FABP4"
+        ],
+        "negative": [
+          "FCN1"
+        ]
+      },
+      {
+        "name": "Endothelial",
+        "cl_id": "CL:0000115",
+        "source": "Human Lung Cell Atlas",
+        "lineage": [
+          "Stroma",
+          "Endothelial"
+        ],
+        "positive": [
+          "PECAM1",
+          "CLDN5"
+        ],
+        "negative": [
+          "EPCAM"
+        ]
+      },
+      {
+        "name": "Fibroblast",
+        "cl_id": "CL:0000057",
+        "source": "Human Lung Cell Atlas",
+        "lineage": [
+          "Stroma",
+          "Fibroblast"
+        ],
+        "positive": [
+          "COL1A1",
+          "DCN"
+        ],
+        "negative": [
+          "PECAM1"
+        ]
+      },
+      {
+        "name": "T cell",
+        "cl_id": "CL:0000084",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "T cell"
+        ],
+        "positive": [
+          "CD3D",
+          "CD3E"
+        ],
+        "negative": [
+          "MS4A1"
+        ]
+      }
+    ],
+    "tumor": [
+      {
+        "name": "Malignant epithelial",
+        "cl_id": null,
+        "source": "curated TME",
+        "lineage": [
+          "Malignant"
+        ],
+        "positive": [
+          "EPCAM",
+          "KRT19"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "Cancer-associated fibroblast",
+        "cl_id": "CL:0000057",
+        "source": "curated TME",
+        "lineage": [
+          "Stroma",
+          "CAF"
+        ],
+        "positive": [
+          "FAP",
+          "ACTA2"
+        ],
+        "negative": [
+          "PECAM1"
+        ]
+      },
+      {
+        "name": "Endothelial",
+        "cl_id": "CL:0000115",
+        "source": "curated TME",
+        "lineage": [
+          "Stroma",
+          "Endothelial"
+        ],
+        "positive": [
+          "PECAM1",
+          "VWF"
+        ],
+        "negative": [
+          "EPCAM"
+        ]
+      },
+      {
+        "name": "T cell",
+        "cl_id": "CL:0000084",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "T cell"
+        ],
+        "positive": [
+          "CD3D",
+          "CD3E"
+        ],
+        "negative": [
+          "MS4A1"
+        ]
+      },
+      {
+        "name": "CD8 Tex",
+        "cl_id": null,
+        "source": "Wherry / TME",
+        "lineage": [
+          "Immune",
+          "T cell",
+          "CD8 Tex"
+        ],
+        "positive": [
+          "CD8A",
+          "PDCD1",
+          "HAVCR2"
+        ],
+        "negative": [
+          "IL7R"
+        ]
+      },
+      {
+        "name": "Treg",
+        "cl_id": "CL:0000815",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "T cell",
+          "Treg"
+        ],
+        "positive": [
+          "FOXP3",
+          "IL2RA"
+        ],
+        "negative": [
+          "IL17A"
+        ]
+      },
+      {
+        "name": "Macrophage",
+        "cl_id": "CL:0000235",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "Macrophage"
+        ],
+        "positive": [
+          "CD68",
+          "CSF1R"
+        ],
+        "negative": [
+          "CD3D"
+        ]
+      },
+      {
+        "name": "B cell",
+        "cl_id": "CL:0000236",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "B cell"
+        ],
+        "positive": [
+          "MS4A1",
+          "CD79A"
+        ],
+        "negative": [
+          "CD3D"
+        ]
+      }
     ]
   }
 }

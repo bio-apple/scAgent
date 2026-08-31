@@ -44,6 +44,9 @@ sc.get.rank_genes_groups_df(adata, group=None)
 - DEG table (gene, logFC, padj, direction); volcano / heatmap; enrichment plots; short non-causal interpretation
 
 ## Gates
+- Condition DE requires **annotated cell types** (or stable cluster→type map) before `pseudobulk_de`.
+- `condition_key` + **n_replicates ≥ 2** → mandatory pseudobulk + DESeq2/edgeR; exploratory DEG intent alone is not confirmatory.
+- Never invent a condition column (`unspecified`) to force DE to run.
 - No raw p-values as claims without multiple-testing correction.
 - Label exploratory vs confirmatory clearly in report text.
 

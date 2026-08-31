@@ -15,6 +15,7 @@ from rag.retriever import format_hits, retrieve_fused
 from scagent.logutil import get_logger
 from scagent.deg_methods import force_pseudobulk_de
 from scagent.skills_loader import load_skill_text, skills_for_phase
+from scagent.best_practices_loader import practices_context
 
 log = get_logger("bio_coder")
 
@@ -89,12 +90,13 @@ def _coder_task(state: dict, phase: str, *, extra: str = "") -> str:
         f"reviewer_issues={json.dumps(state.get('review_qc' if phase == 'qc' else 'review_downstream') or state.get('review') or {}, ensure_ascii=False)}\n"
         f"execution_feedback={json.dumps(_exec_feedback(state, phase), ensure_ascii=False)}\n"
         f"skills:\n{_skill_context(state, phase)}\n"
+        f"best_practices:\n{practices_context(phase, route=list(plan.get('route') or []), query=state.get('user_query'))}\n"
         f"RAG:\n{format_hits(retrieve_fused(state.get('user_query') or phase, phase=phase, route=list(plan.get('route') or []), user_query=state.get('user_query'), top_k=8))}\n"
         + (f"tool_route={json.dumps((state.get('plan') or {}).get('tool_route') or {}, ensure_ascii=False)}\n")
         + "Follow plan.tool_route exactly. Do not choose R vs Python yourself. "
         "Always use R first; Python only when the routed engine is python.\n"
         "输出完整可运行 Python。QC 阶段必须保留 LOCKED QC 块。"
-        "注释阶段必须含 CellTypist + scANVI 集成（ensemble_cell_annotation → obs['scagent_annotation']）+ ≥2 阳性 + ≥1 阴性 marker，并用 fuse_annotation 融合；禁止只调用 Azimuth。"
+        "注释须多层证据：按 plan.tool_route['routes'].get('annotation') 选择主参考（azimuth/singler 或 celltypist），再加 ≥2 阳性 + ≥1 阴性 marker，并用 fuse_annotation / ensemble_cell_annotation 融合到 obs['scagent_annotation']；禁止只调用单一工具。"
         "必须遵守 DAG：PCA/neighbors/UMAP/Leiden 之后才能 rank_genes_groups、pseudobulk_de 或 DPT/PAGA。"
         + _deg_hard_rules(state, phase)
         + "若 execution_feedback.ok 为 false：根据 stderr_tail 修复语法或参数后再输出完整脚本。"

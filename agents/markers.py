@@ -67,21 +67,49 @@ def _normalize_entry(row: dict) -> dict:
 
 
 def load_marker_catalog(path: str | Path | None = None, tissue: str | None = None) -> dict:
+    """Load tissue marker catalog. Never silently map non-immune organs onto PBMC markers."""
     catalog_path = Path(path) if path else DEFAULT_CATALOG
     if catalog_path.suffix.lower() in {".csv", ".tsv"}:
         types = [_normalize_entry(r) for r in _from_table(catalog_path)]
-        return {"tissue": tissue or "custom", "cell_types": types}
+        return {"tissue": tissue or "custom", "cell_types": types, "warning": None}
     if catalog_path.exists():
         data = json.loads(catalog_path.read_text(encoding="utf-8"))
         tissues = data.get("tissues") or {}
+        aliases = {str(k).lower(): k for k in tissues}
+        # Common aliases → catalog keys
+        alias_map = {
+            "blood": "pbmc",
+            "immune": "pbmc",
+            "airway": "lung",
+            "cancer": "tumor",
+            "crc": "tumor",
+            "tme": "tumor",
+        }
         key = None
-        if tissue:
-            key = next((k for k in tissues if k.lower() == tissue.lower()), None)
+        warning = None
+        t_raw = (tissue or "").strip()
+        t_low = t_raw.lower()
+        if t_low:
+            key = aliases.get(t_low) or aliases.get(alias_map.get(t_low, ""))
         if key is None:
-            key = "pbmc" if "pbmc" in tissues else (next(iter(tissues), None))
-        types = [_normalize_entry(r) for r in (tissues.get(key) or [])]
-        return {"tissue": key or tissue or "unknown", "cell_types": types}
-    return {"tissue": tissue or "unknown", "cell_types": []}
+            if t_low in IMMUNE_TISSUES or t_low in {"", "default"}:
+                # Immune / unspecified demo default only — never for lung/tumor/brain/…
+                key = aliases.get("pbmc") or (next(iter(tissues), None) if not t_low else None)
+                if t_low in IMMUNE_TISSUES and key and key != "pbmc":
+                    warning = f"immune tissue {t_raw!r} using catalog {key!r}"
+            else:
+                # Refuse wrong-organ fallback (was: silent PBMC for lung/tumor/embryo)
+                return {
+                    "tissue": t_raw or "unknown",
+                    "cell_types": [],
+                    "warning": (
+                        f"no marker catalog for tissue={t_raw!r}; "
+                        "refusing PBMC fallback — use reference mapping + literature markers"
+                    ),
+                }
+        types = [_normalize_entry(r) for r in (tissues.get(key) or [])] if key else []
+        return {"tissue": key or t_raw or "unknown", "cell_types": types, "warning": warning}
+    return {"tissue": tissue or "unknown", "cell_types": [], "warning": "marker catalog file missing"}
 
 
 def _from_table(path: Path) -> list[dict]:

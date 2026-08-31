@@ -300,8 +300,15 @@ def _pseudobulk_block(
         {force_note}from scagent.analysis import pseudobulk_de
         COND_KEY = {condition_key!r}
         if COND_KEY not in adata.obs.columns:
-            print("SCAGENT_WARN: condition column " + COND_KEY + " missing; pseudobulk path recorded but not tested")
-            adata.obs[COND_KEY] = "unspecified"
+            raise RuntimeError(
+                "SCAGENT_FAIL: condition column " + COND_KEY + " missing; refuse forged labels for pseudobulk_de"
+            )
+        _sk = {sample_key}
+        _nrep = int(adata.obs[_sk].nunique()) if _sk in adata.obs.columns else 0
+        if _nrep < 2:
+            raise RuntimeError(
+                "SCAGENT_FAIL: n_replicates=" + str(_nrep) + " < 2; refuse sample-level DE without biological replicates"
+            )
         adata = pseudobulk_de(
             adata,
             sample_key={sample_key},
