@@ -182,12 +182,14 @@ def _router_downstream_bootstrap(meta: dict, plan: dict) -> str:
         f"""\
         import os
         from pathlib import Path
+        _R_REF = False
         if os.environ.get("SCAGENT_FORCE_PYTHON") != "1":
             from scagent.phase_runner import maybe_run_r_downstream
             _router_meta = {json.dumps(slim_meta, ensure_ascii=False)}
             _router_plan = {json.dumps(slim_plan, ensure_ascii=False)}
             if maybe_run_r_downstream(workspace=Path("."), meta=_router_meta, plan=_router_plan):
-                raise SystemExit(0)
+                _R_REF = True
+                print("SCAGENT_R_REF_OK; continuing Python marker dual-validation + fuse_annotation")
         """
     )
 
@@ -648,6 +650,12 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         res_default = 0.6
     n_pcs = int(p["n_pcs"])
     catalog = load_marker_catalog(meta.get("markers_path"), tissue=str(tissue))
+    if str(meta.get("species") or "").lower() == "mouse":
+        catalog = {
+            "tissue": str(tissue),
+            "cell_types": [],
+            "warning": "mouse: human marker catalog disabled without homology mapping",
+        }
     marker_json = catalog_as_python(catalog)
     skip_reason = plan.get("skip_integration_reason") or "single sample or not requested"
     ct_model = plan.get("celltypist_model")
@@ -853,31 +861,12 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         if __SAMPLE_KEY__ not in adata.obs.columns:
             adata.obs[__SAMPLE_KEY__] = "sample1"
 
-        from scagent.inspect_data import detect_expression_layer
-        _xlayer = detect_expression_layer(adata)
-        if _xlayer.get("layer") == "scaled":
-            print("SCAGENT_WARN: skip scale; X already scaled")
-        else:
-            sc.pp.scale(adata, max_value=__SCALE_MAX__)
-        if "X_pca" in adata.obsm:
-            print("SCAGENT_WARN: skip pca; X_pca exists")
-        else:
-            sc.tl.pca(adata, n_comps=__N_PCS__, svd_solver="arpack", use_highly_variable=True, random_state=SEED)
-        __INTEGRATE__
-        sc.tl.umap(adata, random_state=SEED)
-
-        __RES_BLOCK__
-        sc.tl.leiden(adata, resolution=chosen_resolution, key_added="leiden", random_state=SEED)
-        if CACHE_ON:
-            Path(".cache").mkdir(exist_ok=True)
-            adata.write(Path(".cache") / "after_cluster.h5ad")
-        sc.pl.umap(adata, color=["leiden", __SAMPLE_KEY__, "pct_counts_mt"], save="_overview.png", show=False)
-
-        __DE_BLOCK__
-
-        __CELLTYPIST__
+        __PYTHON_OR_R__
 
         MARKERS = __MARKERS__
+        CATALOG_WARN = __CATALOG_WARN__
+        if CATALOG_WARN:
+            print("SCAGENT_WARN: " + str(CATALOG_WARN))
         TISSUE = __TISSUE_NAME__
         IMMUNE_TISSUES = set(["pbmc", "blood", "immune"])
         expr = adata.raw.to_adata() if adata.raw is not None else adata
@@ -897,32 +886,54 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         if str(TISSUE).lower() not in IMMUNE_TISSUES and "Immune_All" in str(adata.uns.get("celltypist_model") or ""):
             print("SCAGENT_WARN: CellTypist immune model may be cross-tissue; marker hierarchy takes precedence")
 
+        from scagent.annotate import dual_validate_expression, fuse_annotation, apply_ontology_ids
+
+        def _gene_mean_vec(gene):
+            if gene not in gene_to_idx:
+                return None
+            X = expr[:, [gene_to_idx[gene]]].X
+            if hasattr(X, "toarray"):
+                X = X.toarray()
+            return np.asarray(X).ravel()
+
         evidence_rows = []
         cluster_ann = {}
         cluster_lin = {}
+        if not MARKERS:
+            print("SCAGENT_WARN: empty marker catalog; dual_ok will be False")
         for cl in sorted(adata.obs["leiden"].astype(str).unique()):
             mask = (adata.obs["leiden"].astype(str) == cl).to_numpy()
             best = None
             best_score = -1.0
+            best_dual = {"dual_ok": False}
             for ct in MARKERS:
                 pos = ct.get("positive") or []
                 neg = ct.get("negative") or []
                 if len(pos) < 2:
                     continue
-                mp = _mean(pos)
-                mn = _mean(neg) if neg else np.zeros(expr.n_obs)
-                if mp is None:
+                pos_means = []
+                for g in pos:
+                    v = _gene_mean_vec(str(g))
+                    pos_means.append(float(v[mask].mean()) if v is not None else None)
+                neg_means = []
+                for g in neg:
+                    v = _gene_mean_vec(str(g))
+                    neg_means.append(float(v[mask].mean()) if v is not None else None)
+                dual = dual_validate_expression(pos_means, neg_means)
+                present_pos = [m for m in pos_means if m is not None]
+                present_neg = [m for m in neg_means if m is not None]
+                if len(present_pos) < 2:
                     continue
-                score = float(mp[mask].mean() - (0.0 if mn is None else mn[mask].mean()))
+                score = float(np.mean(present_pos) - (np.mean(present_neg) if present_neg else 0.0))
                 depth = len(ct.get("lineage") or [ct.get("name")])
-                score = score + 0.01 * depth
+                score = score + 0.01 * depth + (1.0 if dual.get("dual_ok") else 0.0)
                 if score > best_score:
                     best_score = score
                     best = ct
-            pos_ok = best and len(best.get("positive") or []) >= 2
-            neg_ok = best and len(best.get("negative") or []) >= 1
-            lin = list((best or {}).get("lineage") or []) if (pos_ok and neg_ok) else []
-            label = (best or {}).get("name") if (pos_ok and neg_ok) else "unknown"
+                    best_dual = dual
+            dual_ok = bool(best_dual.get("dual_ok"))
+            lin = list((best or {}).get("lineage") or []) if dual_ok else []
+            label = (best or {}).get("name") if dual_ok else "unknown"
             cluster_ann[cl] = label
             cluster_lin[cl] = lin
             evidence_rows.append(
@@ -930,9 +941,11 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
                     "cluster": cl,
                     "marker_label": label,
                     "lineage": lin,
+                    "cl_id": (best or {}).get("cl_id") if dual_ok else None,
                     "positive": (best or {}).get("positive"),
                     "negative": (best or {}).get("negative"),
-                    "dual_ok": bool(pos_ok and neg_ok),
+                    "dual_ok": dual_ok,
+                    "dual_detail": best_dual,
                     "auto_label": None,
                 }
             )
@@ -941,9 +954,10 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         for i in range(max_depth):
             col = "cell_type_l" + str(i + 1)
             adata.obs[col] = adata.obs["leiden"].astype(str).map(lambda c, i=i: (cluster_lin.get(c) or ["unknown"])[i] if i < len(cluster_lin.get(c) or []) else (cluster_lin.get(c) or ["unknown"])[-1] if cluster_lin.get(c) else "unknown")
-        from scagent.annotate import fuse_annotation
         _auto_src = "scagent_annotation" if "scagent_annotation" in adata.obs.columns else "celltypist_label"
         fuse_annotation(adata, sources=("marker_label", _auto_src, "deg_label"))
+        apply_ontology_ids(adata, {"cell_types": MARKERS}, label_col="cell_type")
+        _dual_rate = float(np.mean([1.0 if r.get("dual_ok") else 0.0 for r in evidence_rows])) if evidence_rows else 0.0
         if "scagent_annotation" in adata.obs:
             auto = adata.obs["scagent_annotation"].astype(str)
         elif "celltypist_label" in adata.obs:
@@ -1007,7 +1021,10 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             "marker_n_overlap": (adata.uns.get("scagent_markers") or {{}}).get("n_overlap"),
             "marker_jaccard": (adata.uns.get("scagent_markers") or {{}}).get("jaccard"),
             "seed": SEED,
-            "annotation_dual_validation": True,
+            "annotation_dual_validation": bool(_dual_rate >= 0.5 and any(r.get("dual_ok") for r in evidence_rows)),
+            "annotation_dual_rate": float(_dual_rate),
+            "annotation_n_dual_ok": int(sum(1 for r in evidence_rows if r.get("dual_ok"))),
+            "r_reference_used": bool(_R_REF),
             "hierarchical_annotation": True,
             "annotation_fusion": True,
             "trajectory_verdict": (adata.uns.get("scagent_trajectory") or {{}}).get("verdict"),
@@ -1023,18 +1040,78 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         print(adata)
         """
     )
+    def _ind(text: str, n: int = 4) -> str:
+        pad = " " * n
+        return "\n".join(pad + ln if ln.strip() else ln for ln in text.splitlines())
+
+    sk = sample_key  # already repr
+    python_path = "\n".join(
+        [
+            "from scagent.inspect_data import detect_expression_layer",
+            "_xlayer = detect_expression_layer(adata)",
+            'if _xlayer.get("layer") == "scaled":',
+            '    print("SCAGENT_WARN: skip scale; X already scaled")',
+            "else:",
+            "    sc.pp.scale(adata, max_value=__SCALE_MAX__)",
+            'if "X_pca" in adata.obsm:',
+            '    print("SCAGENT_WARN: skip pca; X_pca exists")',
+            "else:",
+            '    sc.tl.pca(adata, n_comps=__N_PCS__, svd_solver="arpack", use_highly_variable=True, random_state=SEED)',
+            integrate.strip(),
+            "sc.tl.umap(adata, random_state=SEED)",
+            "",
+            res_block.strip(),
+            'sc.tl.leiden(adata, resolution=chosen_resolution, key_added="leiden", random_state=SEED)',
+            "if CACHE_ON:",
+            '    Path(".cache").mkdir(exist_ok=True)',
+            '    adata.write(Path(".cache") / "after_cluster.h5ad")',
+            f'sc.pl.umap(adata, color=["leiden", {sk}, "pct_counts_mt"], save="_overview.png", show=False)',
+            "",
+            _de_block(marker_method, deg_cv).strip(),
+            "",
+            _celltypist_block(ct_model).strip(),
+        ]
+    )
+    r_path = "\n".join(
+        [
+            'if "leiden" not in adata.obs.columns:',
+            '    for _alt in ("seurat_clusters",):',
+            "        if _alt in adata.obs.columns:",
+            '            adata.obs["leiden"] = adata.obs[_alt].astype(str)',
+            "            break",
+            'if "leiden" not in adata.obs.columns:',
+            '    raise RuntimeError("SCAGENT_FAIL: R downstream missing leiden/seurat_clusters")',
+            'if "scagent_annotation" in adata.obs.columns:',
+            '    _labs = adata.obs["scagent_annotation"].astype(str)',
+            '    if _labs.str.fullmatch(r"[0-9]+").all() or set(_labs.unique()) <= set(adata.obs["leiden"].astype(str).unique()):',
+            '        print("SCAGENT_WARN: R annotation looks like cluster IDs; clearing before fusion")',
+            '        adata.obs["scagent_annotation"] = "unassigned"',
+            '        adata.obs["scagent_annotation_conf"] = 0.0',
+            'chosen_resolution = float(adata.uns.get("leiden_resolution") or adata.obs["leiden"].nunique())',
+            'print("SCAGENT_SKIP_RECLUSTER; R reference kept as one fuse source")',
+            'if "rank_genes_groups" not in (adata.uns or {}):',
+            "    from scagent.analysis import rank_genes",
+            '    rank_genes(adata, "leiden", method="wilcoxon", cross_validate=False)',
+            '    print("rank_genes (R-ref path) exploratory cluster markers")',
+            f'_cols = ["leiden", {sk}]',
+            'if "pct_counts_mt" in adata.obs.columns:',
+            '    _cols.append("pct_counts_mt")',
+            'sc.pl.umap(adata, color=_cols, save="_overview.png", show=False)',
+        ]
+    )
+    # Python path first so AST line-order DAG sees pca/leiden/umap before R-branch rank_genes.
+    python_or_r = "if not _R_REF:\n" + _ind(python_path, 4) + "\nelse:\n" + _ind(r_path, 4)
+
     return (
         tpl.replace("__SAMPLE_KEY__", sample_key)
         .replace("__ROUTER_DN__", _router_downstream_bootstrap(meta, plan or {}))
-        .replace("__INTEGRATE__", integrate.strip("\n"))
-        .replace("__RES_BLOCK__", res_block.strip("\n"))
-        .replace("__DE_BLOCK__", _de_block(marker_method, deg_cv).strip("\n"))
+        .replace("__PYTHON_OR_R__", python_or_r)
         .replace("__PSEUDOBULK__", _pseudobulk_block(needs_pb, condition_key, sample_key, deg_engine, deg_cv, force_pb).strip("\n"))
-        .replace("__CELLTYPIST__", _celltypist_block(ct_model).strip("\n"))
         .replace("__SECOND_REF__", _second_ref_block().strip("\n"))
         .replace("__TRAJECTORY__", _trajectory_block(traj_mode).strip("\n"))
         .replace("__INTEG_METRICS__", _integration_metrics_block().strip("\n"))
         .replace("__MARKERS__", marker_json)
+        .replace("__CATALOG_WARN__", json.dumps(catalog.get("warning")))
         .replace("__INTEGRATOR__", repr(integrator))
         .replace("__TISSUE_NAME__", json.dumps(str(tissue)))
         .replace("__SEED__", str(int(p["seed"])))

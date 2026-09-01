@@ -16,6 +16,9 @@ def test_labels_agree_alias():
     assert labels_agree("CD8 T", "CD8 T cells") is True
     assert labels_agree("B cell", "NK") is False
     assert labels_agree("unknown", "B cell") is False
+    # No unconstrained substring: lineage parent must NOT auto-match subtype
+    assert labels_agree("T cell", "CD8 T") is False
+    assert labels_agree("CD8 T", "CD8 T cell") is True
 
 
 def test_fuse_majority_and_conflict():

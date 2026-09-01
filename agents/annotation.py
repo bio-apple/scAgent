@@ -14,13 +14,13 @@ def build_annotation_plan(state: dict) -> dict:
     meta = dict(state.get("metadata") or {})
     if state.get("markers_path"):
         meta["markers_path"] = state["markers_path"]
-    catalog = load_marker_catalog(meta.get("markers_path"), tissue=str(meta.get("tissue") or "pbmc"))
+    catalog = load_marker_catalog(meta.get("markers_path"), tissue=str(meta.get("tissue") or "unknown"))
     ct_model = choose_celltypist_model(meta.get("tissue"), meta.get("species"))
     plan_in = dict(state.get("plan") or {})
     if state.get("resolution") is not None:
         plan_in["resolution"] = state["resolution"]
     plan_in.setdefault("celltypist_model", ct_model)
-    tissue = str(meta.get("tissue") or "pbmc")
+    tissue = str(meta.get("tissue") or "unknown")
     rag = format_hits(
         retrieve_fused(
             f"{tissue} CellTypist marker dual validation annotation",
@@ -61,6 +61,7 @@ def build_annotation_plan(state: dict) -> dict:
         "dual_validation": True,
         "celltypist_model": ct_model,
         "catalog_tissue": catalog.get("tissue"),
+        "catalog_warning": catalog.get("warning"),
         "n_cell_types": len(catalog.get("cell_types") or []),
         "rag_excerpt": rag,
         "paper_excerpt": lit.get("paper_excerpt") or "",

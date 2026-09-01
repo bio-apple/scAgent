@@ -59,10 +59,10 @@ sc.tl.rank_genes_groups(adata, groupby="leiden", method="wilcoxon", pts=True)
 - Cell type UMAP; marker DotPlot; confidence / agreement summary
 
 ## Gates
-- Forbid single-gene final labels; require dual validation (≥2 positive / ≥1 negative).
-- Unknown / non-catalog tissues: **refuse silent PBMC marker fallback** — use reference mapping + literature markers.
-- Forbid single-gene final labels.
-- Automated labels without marker check are incomplete.
+- Dual validation is **expression-gated** (`dual_validate_expression`): ≥2 positive genes above threshold and ≥1 negative below — not catalog list length alone.
+- R/Azimuth/SingleR success is **one fuse source only**; never `SystemExit` past marker dual + `fuse_annotation`.
+- Unknown / empty tissue: refuse silent PBMC marker fallback; mouse: no human CellTypist/catalog without homology.
+- Cluster IDs (`leiden` / `seurat_clusters`) are never final cell types; write ontology IDs when catalog has `cl_id`.
 
 ## Related
 - `knowledge/best_practices/cell-annotation.md`, `marker-genes.md`; KB: `marker_db`, `cell_ontology`

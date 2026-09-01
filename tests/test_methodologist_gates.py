@@ -14,9 +14,13 @@ def test_marker_catalog_refuses_pbmc_fallback_for_unknown_organs():
     assert lung["cell_types"] and lung.get("warning") in (None, "")
     tumor = load_marker_catalog(tissue="tumor")
     assert tumor["cell_types"]
-    embryo = load_marker_catalog(tissue="embryo")
-    assert embryo["cell_types"] == []
-    assert "refusing PBMC" in (embryo.get("warning") or "")
+    skin = load_marker_catalog(tissue="skin")
+    assert skin["cell_types"] == []
+    assert "refusing PBMC" in (skin.get("warning") or "")
+    unknown = load_marker_catalog(tissue="unknown")
+    assert unknown["cell_types"] == []
+    gut = load_marker_catalog(tissue="gut")
+    assert gut["cell_types"]
 
 
 def test_needs_pseudobulk_aligned_with_force_only():

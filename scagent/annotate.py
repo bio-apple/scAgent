@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Any
 
@@ -13,6 +14,19 @@ CELLTYPIST_CONF_THRESHOLD = 0.8
 SCANVI_LABELS_KEY = "_scanvi_supervision"
 _EMPTY = {"", "unknown", "unassigned", "nan", "none", "low_conf", "mixed", "na"}
 
+# Exact-set aliases only — never unconstrained substring ("T cell" ⊄ "CD8 T").
+_ALIAS_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"cd8 t", "cd8 t cell", "cd8 t cells", "cd8+ t", "cd8+ t cell", "cd8+ t cells", "cytotoxic t"}),
+    frozenset({"cd4 t", "cd4 t cell", "cd4 t cells", "cd4+ t", "cd4+ t cell", "cd4+ t cells", "helper t"}),
+    frozenset({"t cell", "t cells", "t-cell", "t lymphocyte", "t lymphocytes"}),
+    frozenset({"b cell", "b cells", "b-cell", "b lymphocyte", "b lymphocytes"}),
+    frozenset({"nk", "nk cell", "nk cells", "natural killer", "natural killer cell", "natural killer cells"}),
+    frozenset({"monocyte", "monocytes", "cd14 monocyte", "cd14+ monocyte", "cd16 monocyte"}),
+    frozenset({"macrophage", "macrophages", "mφ"}),
+    frozenset({"platelet", "platelets", "megakaryocyte"}),
+    frozenset({"dendritic cell", "dendritic cells", "cdc", "pdc", "dc"}),
+)
+
 
 def _norm(label: Any) -> str:
     s = str(label or "").strip()
@@ -21,19 +35,77 @@ def _norm(label: Any) -> str:
     return s
 
 
+def _canon_key(label: str) -> str:
+    s = label.lower().strip()
+    s = s.replace("+", "+")
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"s$", "", s.replace(" cells", " cell").strip())
+    return s
+
+
 def labels_agree(a: Any, b: Any) -> bool:
-    """True if labels are the same type under light aliasing (substring / case)."""
-    x, y = _norm(a).lower(), _norm(b).lower()
+    """True if labels match exactly, after light plural/alias normalization — not substring."""
+    x, y = _norm(a), _norm(b)
     if not x or not y:
         return False
-    if x == y:
+    xl, yl = x.lower(), y.lower()
+    if xl == yl:
         return True
-    return x in y or y in x
+    cx, cy = _canon_key(x), _canon_key(y)
+    if cx == cy:
+        return True
+    for group in _ALIAS_GROUPS:
+        if cx in group and cy in group:
+            return True
+        # also allow raw lower forms in groups
+        if xl in group and yl in group:
+            return True
+    return False
 
 
 def _canonical(group: list[str]) -> str:
     counts = Counter(group)
     return counts.most_common(1)[0][0]
+
+
+def dual_validate_expression(
+    pos_means: list[float],
+    neg_means: list[float],
+    *,
+    pos_min: float = 0.1,
+    neg_max: float = 0.5,
+    min_pos_pass: int = 2,
+    min_neg_pass: int = 1,
+) -> dict[str, Any]:
+    """Expression-gate dual validation for one cluster.
+
+    Requires ≥min_pos_pass positive genes above ``pos_min`` and
+    ≥min_neg_pass negative genes below ``neg_max`` (when negatives listed).
+    """
+    pos_pass = [m for m in pos_means if m is not None and m >= pos_min]
+    neg_pass = [m for m in neg_means if m is not None and m <= neg_max]
+    need_neg = len(neg_means) > 0
+    ok = len(pos_pass) >= min_pos_pass and (not need_neg or len(neg_pass) >= min_neg_pass)
+    return {
+        "dual_ok": bool(ok),
+        "n_pos_pass": len(pos_pass),
+        "n_neg_pass": len(neg_pass),
+        "n_pos": len(pos_means),
+        "n_neg": len(neg_means),
+        "pos_min": pos_min,
+        "neg_max": neg_max,
+    }
+
+
+def apply_ontology_ids(adata, catalog: dict, *, label_col: str = "cell_type") -> None:
+    """Map free-text cell_type → cell_ontology_id from catalog cl_id when available."""
+    types = list((catalog or {}).get("cell_types") or [])
+    by_name = {str(t.get("name") or "").lower(): t.get("cl_id") for t in types if t.get("cl_id")}
+    ids = []
+    for lab in adata.obs[label_col].astype(str):
+        base = lab.split("|", 1)[0].strip().lower()
+        ids.append(by_name.get(base) or by_name.get(_canon_key(base)) or None)
+    adata.obs["cell_ontology_id"] = ids
 
 
 def deg_catalog_labels(adata, catalog: dict, *, groupby: str = "leiden", n_top: int = 25) -> None:

@@ -98,6 +98,18 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
             _add(records, "注释只调用了 Azimuth，缺少独立 marker/DE 证据融合", id="down.azimuth_only")
         if not has_dual:
             _add(records, "注释缺少 dual validation（≥2 阳性 + ≥1 阴性 marker）", id="down.dual")
+        if "dual_validate_expression" not in low and "dual_ok" not in low:
+            _add(
+                records,
+                "dual validation 须基于表达门槛（dual_validate_expression），不能只数 catalog 基因个数",
+                id="down.dual_expression",
+            )
+        if "SystemExit(0)" in text and "SCAGENT_R_REF_OK" not in text:
+            _add(
+                records,
+                "R 注释成功后不得 SystemExit 跳过 marker/fuse 证据层",
+                id="down.r_skip_evidence",
+            )
         if "cell_type_l1" not in low and "lineage" not in low:
             _add(records, "注释缺少层级字段（cell_type_l1 / lineage）", id="down.lineage")
         # Hard-fail only when replicates≥2 + condition (force_pseudobulk_de), not exploratory DEG intent.
@@ -364,12 +376,21 @@ def publication_review(state: dict) -> dict:
     else:
         items.append(_item("doublet_detection", "missing", "未检测到双细胞检测"))
 
-    if rd.get("has_dual") or ("positive" in text and "negative" in text):
-        items.append(_item("markers", "pass", "≥2 阳性 + ≥1 阴性 marker 双验证"))
+    ev_dual = mets.get("annotation_dual_validation")
+    ev_rate = mets.get("annotation_dual_rate")
+    if ev_dual is True or (isinstance(ev_rate, (int, float)) and float(ev_rate) >= 0.5):
+        detail = "表达门槛 dual_ok"
+        if ev_rate is not None:
+            detail += f" rate={ev_rate}"
+        items.append(_item("markers", "pass", detail))
+    elif rd.get("has_dual") or ("positive" in text and "negative" in text):
+        items.append(_item("markers", "pass", "代码含 dual validation（执行 metrics 未回报时）"))
     elif not (state.get("code_downstream") or rd):
         items.append(_item("markers", "missing", "注释阶段未运行"))
     else:
-        items.append(_item("markers", "fail", "marker 双验证不完整"))
+        items.append(_item("markers", "fail", "marker 双验证不完整或未达表达门槛"))
+    if mets.get("r_reference_used") and not mets.get("annotation_fusion"):
+        items.append(_item("annotation_fusion", "fail", "R 参考标签未进入 fuse_annotation"))
 
     need_pb = bool(force_pseudobulk_de(meta, plan) or plan.get("force_pseudobulk_de") or meta.get("force_pseudobulk_de"))
     eng = str(mets.get("deg_engine") or "")

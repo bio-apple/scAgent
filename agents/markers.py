@@ -36,10 +36,14 @@ def choose_celltypist_model(tissue: str | None, species: str | None = None) -> s
     t = str(tissue or "default").lower()
     if t in {"default", "unknown", ""}:
         return None
-    if str(species or "").lower() == "mouse" and t in {"brain"}:
-        return "Developing_Mouse_Brain.pkl"
-    if str(species or "").lower() == "mouse" and t in {"gut", "intestine"}:
-        return "Adult_Mouse_Gut.pkl"
+    sp = str(species or "").lower()
+    if sp == "mouse":
+        if t in {"brain"}:
+            return "Developing_Mouse_Brain.pkl"
+        if t in {"gut", "intestine", "colon"}:
+            return "Adult_Mouse_Gut.pkl"
+        # Refuse human CellTypist models on mouse without homology mapping.
+        return None
     return CELLTYPIST_MODELS.get(t)
 
 
@@ -84,6 +88,9 @@ def load_marker_catalog(path: str | Path | None = None, tissue: str | None = Non
             "cancer": "tumor",
             "crc": "tumor",
             "tme": "tumor",
+            "intestine": "gut",
+            "colon": "gut",
+            "fetal": "embryo",
         }
         key = None
         warning = None
@@ -92,13 +99,18 @@ def load_marker_catalog(path: str | Path | None = None, tissue: str | None = Non
         if t_low:
             key = aliases.get(t_low) or aliases.get(alias_map.get(t_low, ""))
         if key is None:
-            if t_low in IMMUNE_TISSUES or t_low in {"", "default"}:
-                # Immune / unspecified demo default only — never for lung/tumor/brain/…
-                key = aliases.get("pbmc") or (next(iter(tissues), None) if not t_low else None)
-                if t_low in IMMUNE_TISSUES and key and key != "pbmc":
+            if t_low in IMMUNE_TISSUES:
+                key = aliases.get("pbmc")
+                if key and key != "pbmc":
                     warning = f"immune tissue {t_raw!r} using catalog {key!r}"
+            elif t_low in {"", "default", "unknown"}:
+                # Missing tissue: empty catalog — never silent PBMC
+                return {
+                    "tissue": t_raw or "unknown",
+                    "cell_types": [],
+                    "warning": "tissue missing/unknown; refusing PBMC marker fallback — set --tissue",
+                }
             else:
-                # Refuse wrong-organ fallback (was: silent PBMC for lung/tumor/embryo)
                 return {
                     "tissue": t_raw or "unknown",
                     "cell_types": [],

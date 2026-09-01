@@ -740,6 +740,261 @@
           "CD3D"
         ]
       }
+    ],
+    "gut": [
+      {
+        "name": "Epithelial",
+        "cl_id": "CL:0000066",
+        "source": "Gut Cell Atlas",
+        "lineage": [
+          "Epithelial"
+        ],
+        "positive": [
+          "EPCAM",
+          "KRT8"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "Enterocyte",
+        "cl_id": "CL:0000584",
+        "source": "Gut Cell Atlas",
+        "lineage": [
+          "Epithelial",
+          "Enterocyte"
+        ],
+        "positive": [
+          "FABP1",
+          "APOA1"
+        ],
+        "negative": [
+          "MUC2"
+        ]
+      },
+      {
+        "name": "Goblet",
+        "cl_id": "CL:0000160",
+        "source": "Gut Cell Atlas",
+        "lineage": [
+          "Epithelial",
+          "Goblet"
+        ],
+        "positive": [
+          "MUC2",
+          "TFF3"
+        ],
+        "negative": [
+          "FABP1"
+        ]
+      },
+      {
+        "name": "Paneth",
+        "cl_id": "CL:0000510",
+        "source": "Gut Cell Atlas",
+        "lineage": [
+          "Epithelial",
+          "Paneth"
+        ],
+        "positive": [
+          "DEFA5",
+          "LYZ"
+        ],
+        "negative": [
+          "MUC2"
+        ]
+      },
+      {
+        "name": "T cell",
+        "cl_id": "CL:0000084",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "T cell"
+        ],
+        "positive": [
+          "CD3D",
+          "CD3E"
+        ],
+        "negative": [
+          "MS4A1"
+        ]
+      },
+      {
+        "name": "B cell",
+        "cl_id": "CL:0000236",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "B cell"
+        ],
+        "positive": [
+          "MS4A1",
+          "CD79A"
+        ],
+        "negative": [
+          "CD3D"
+        ]
+      },
+      {
+        "name": "Plasma",
+        "cl_id": "CL:0000786",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "Plasma"
+        ],
+        "positive": [
+          "JCHAIN",
+          "MZB1"
+        ],
+        "negative": [
+          "MS4A1"
+        ]
+      },
+      {
+        "name": "Fibroblast",
+        "cl_id": "CL:0000057",
+        "source": "Gut Cell Atlas",
+        "lineage": [
+          "Stroma",
+          "Fibroblast"
+        ],
+        "positive": [
+          "COL1A1",
+          "DCN"
+        ],
+        "negative": [
+          "EPCAM"
+        ]
+      }
+    ],
+    "embryo": [
+      {
+        "name": "Progenitor",
+        "cl_id": null,
+        "source": "curated fetal",
+        "lineage": [
+          "Progenitor"
+        ],
+        "positive": [
+          "SOX2",
+          "POU5F1"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "Erythroid",
+        "cl_id": "CL:0000764",
+        "source": "curated fetal",
+        "lineage": [
+          "Erythroid"
+        ],
+        "positive": [
+          "HBB",
+          "GYPA"
+        ],
+        "negative": [
+          "PTPRC"
+        ]
+      },
+      {
+        "name": "Megakaryocyte",
+        "cl_id": "CL:0000556",
+        "source": "curated fetal",
+        "lineage": [
+          "Megakaryocyte"
+        ],
+        "positive": [
+          "PF4",
+          "ITGA2B"
+        ],
+        "negative": [
+          "HBB"
+        ]
+      },
+      {
+        "name": "Myeloid",
+        "cl_id": "CL:0000763",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "Myeloid"
+        ],
+        "positive": [
+          "LYZ",
+          "CST3"
+        ],
+        "negative": [
+          "CD3D"
+        ]
+      },
+      {
+        "name": "T/NK lymphoid",
+        "cl_id": "CL:0000542",
+        "source": "curated fetal",
+        "lineage": [
+          "Immune",
+          "Lymphoid"
+        ],
+        "positive": [
+          "CD3D",
+          "NKG7"
+        ],
+        "negative": [
+          "MS4A1"
+        ]
+      },
+      {
+        "name": "B lineage",
+        "cl_id": "CL:0000236",
+        "source": "CellMarker 2.0",
+        "lineage": [
+          "Immune",
+          "B lineage"
+        ],
+        "positive": [
+          "CD79A",
+          "MS4A1"
+        ],
+        "negative": [
+          "CD3D"
+        ]
+      },
+      {
+        "name": "Stromal",
+        "cl_id": "CL:0000499",
+        "source": "curated fetal",
+        "lineage": [
+          "Stroma"
+        ],
+        "positive": [
+          "COL1A1",
+          "DCN"
+        ],
+        "negative": [
+          "HBB"
+        ]
+      },
+      {
+        "name": "Endothelial",
+        "cl_id": "CL:0000115",
+        "source": "curated fetal",
+        "lineage": [
+          "Stroma",
+          "Endothelial"
+        ],
+        "positive": [
+          "PECAM1",
+          "CDH5"
+        ],
+        "negative": [
+          "COL1A1"
+        ]
+      }
     ]
   }
 }
