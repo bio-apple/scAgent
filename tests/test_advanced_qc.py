@@ -32,17 +32,20 @@ def test_qc_writes_predicted_doublet_and_cell_cycle():
     assert r["passed"] is True
 
 
-def test_brain_ambient_is_real_correction():
-    assert choose_ambient("brain", "auto") == "soupx"
+def test_brain_ambient_auto_honest_until_backend_wired():
+    # Real SoupX is not wired; auto must not pretend to request SoupX.
+    assert choose_ambient("brain", "auto") == "none"
     assert choose_ambient("pbmc", "auto") == "none"
     s = build_qc_strategy({"metadata": {"tissue": "brain"}})
-    assert s["ambient"] == "soupx"
+    assert s["ambient"] == "none"
+    # Explicit request still emits remove_ambient (applied=False if unavailable).
     code = qc_preprocess_script(
         {"data_path": "x.h5ad", "species": "human", "tissue": "brain"},
-        s,
+        {"nmads": 5, "ambient": "soupx"},
     )
     compile(code, "<amb>", "exec")
     assert "remove_ambient" in code
+    assert "allow_heuristic=False" in code
     assert "consider SoupX/DecontX" not in code
 
 

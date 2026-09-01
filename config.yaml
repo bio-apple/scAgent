@@ -138,7 +138,9 @@ qc:
   remove_doublets: false      # true 或 CLI --remove-doublets：按 doublet_filter 过滤
   doublet_filter: high_conf    # high_conf=保守（仅移除高置信）| all=严格（高+低均移除）
   doublet_rate_max: 0.10      # 预测双细胞比例超过此值则审查警告/失败
-  doublet_methods: auto       # auto | scrublet | both。auto：多样本/复杂组织 Scrublet+scDblFinder（无 R 则表达模拟）
+  doublet_methods: auto       # auto | scrublet | both。auto：多样本/复杂组织 Scrublet+scDblFinder（无 R 则 count-simulation 启发式）
+  per_sample: null            # null=多样本时自动按 sample 独立 MAD；true/false 强制
+  normalization: log1p        # log1p | pearson | sctransform（SCT 需 Seurat+R；失败回退 pearson 并诚实标注）
 
 # 组间差异表达：按 sample × cell type 加和 raw counts，禁止 cell-level Wilcoxon 当结论。
 deg:
@@ -155,7 +157,7 @@ deg:
 modules:
   batch: auto                 # auto | none | harmony | scvi | cca | scanorama | bbknn
   imputation: none            # none | magic | alra
-  ambient: auto               # auto | none | soupx | decontx；brain/tumor 的 auto → soupx（无真 SoupX 时不改 counts，除非显式 *_heuristic）
+  ambient: auto               # auto | none | soupx | decontx；auto 在无真 SoupX 绑定时为 none（不假装请求）；显式 soupx 不可用则不改 counts（除非 *_heuristic）
   trajectory: auto            # auto=按组织/spliced 层评估连续性；force=用户要轨迹也拟合；off=关
 
 # SciAgent Tool Router：R 优先，Python 仅后备。语言由本表硬编码，禁止 LLM 自选。

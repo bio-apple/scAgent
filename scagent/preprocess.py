@@ -25,8 +25,20 @@ def calculate_qc(adata, *, qc_vars: list[str] | None = None):
     return adata
 
 
-def filter_dynamic(adata, *, method: str | None = None, nmads: int = 5, percentile: dict | None = None):
-    """MAD and/or percentile filter. No default mito%<5."""
+def filter_dynamic(
+    adata,
+    *,
+    method: str | None = None,
+    nmads: int = 5,
+    percentile: dict | None = None,
+    sample_key: str | None = None,
+    per_sample: bool | None = None,
+):
+    """MAD and/or percentile filter. No default mito%<5.
+
+    When ``per_sample`` is True (default if sample_key has >1 levels), thresholds
+    are computed within each sample then OR-merged — avoids one sample dominating MAD.
+    """
     import numpy as np
     from scipy.stats import median_abs_deviation
 
@@ -34,8 +46,39 @@ def filter_dynamic(adata, *, method: str | None = None, nmads: int = 5, percenti
     method = method or (cfg.get("qc") or {}).get("method") or "mad"
     percentile = percentile or (cfg.get("qc") or {}).get("percentile") or {}
     n_before = adata.n_obs
+    sk = sample_key
+    if per_sample is None:
+        per_sample = bool(sk and sk in adata.obs.columns and int(adata.obs[sk].nunique()) > 1)
+    if per_sample and sk and sk in adata.obs.columns:
+        outlier = np.zeros(n_before, dtype=bool)
+        for sample in adata.obs[sk].astype(str).unique():
+            cell_mask = (adata.obs[sk].astype(str) == str(sample)).to_numpy()
+            sub = adata[cell_mask]
+            outlier[cell_mask] = _outlier_mask(sub, method=method, nmads=nmads, percentile=percentile)
+        adata.obs["outlier"] = outlier
+        out = adata[~outlier].copy()
+        log.info(
+            "filter_dynamic method=%s per_sample=%s removed=%s remaining=%s",
+            method,
+            sk,
+            n_before - out.n_obs,
+            out.n_obs,
+        )
+        return out
+    outlier = _outlier_mask(adata, method=method, nmads=nmads, percentile=percentile)
+    adata.obs["outlier"] = outlier
+    out = adata[~outlier].copy()
+    log.info("filter_dynamic method=%s removed=%s remaining=%s", method, n_before - out.n_obs, out.n_obs)
+    return out
+
+
+def _outlier_mask(adata, *, method: str, nmads: int, percentile: dict):
+    import numpy as np
+    from scipy.stats import median_abs_deviation
+
+    n = adata.n_obs
     x_mt = adata.obs["pct_counts_mt"].to_numpy()
-    outlier = np.zeros(n_before, dtype=bool)
+    outlier = np.zeros(n, dtype=bool)
 
     def mad_mask(values, side="two"):
         med = np.median(values)
@@ -58,9 +101,7 @@ def filter_dynamic(adata, *, method: str | None = None, nmads: int = 5, percenti
         outlier |= c < np.percentile(c, percentile.get("total_counts_low") or 2)
         outlier |= c > np.percentile(c, percentile.get("total_counts_high") or 98)
         outlier |= x_mt > np.percentile(x_mt, percentile.get("pct_mt_high") or 98)
-    adata = adata[~outlier].copy()
-    log.info("filter_dynamic method=%s removed=%s remaining=%s", method, n_before - adata.n_obs, adata.n_obs)
-    return adata
+    return outlier
 
 
 def normalize_log1p(adata, *, target_sum: float | None = None):
@@ -92,6 +133,107 @@ def normalize_log1p(adata, *, target_sum: float | None = None):
     info["layer"] = "log1p"
     adata.uns["expression_layer"] = info
     return adata
+
+
+def normalize_expression(adata, *, method: str = "log1p", target_sum: float | None = None):
+    """Normalize counts. method: log1p | pearson | sctransform.
+
+    ``sctransform`` tries Seurat SCTransform via R; on failure falls back to Pearson
+    residuals and records honesty metadata (never silently claims SCT success).
+    """
+    method = str(method or "log1p").lower().strip()
+    if method in {"none", "off", "skip"}:
+        adata.uns["normalization"] = {"method": "none", "applied": False}
+        return adata
+    if method in {"log1p", "lognorm", "lognormalize"}:
+        normalize_log1p(adata, target_sum=target_sum)
+        adata.uns["normalization"] = {"method": "log1p", "applied": True}
+        return adata
+    if method in {"pearson", "pearson_residuals"}:
+        return _normalize_pearson(adata)
+    if method in {"sctransform", "sct"}:
+        ok = _normalize_sctransform_r(adata)
+        if ok:
+            return adata
+        log.warning("SCTransform unavailable; falling back to pearson_residuals")
+        print("SCAGENT_WARN: SCTransform unavailable; used pearson_residuals (not Seurat SCT)")
+        out = _normalize_pearson(adata)
+        info = dict(out.uns.get("normalization") or {})
+        info.update({"requested": "sctransform", "fallback": "pearson_residuals"})
+        out.uns["normalization"] = info
+        return out
+    raise ValueError(f"unknown normalization method: {method}")
+
+
+def _normalize_pearson(adata):
+    import scanpy as sc
+
+    from scagent.inspect_data import detect_expression_layer
+
+    info = detect_expression_layer(adata)
+    if "counts" not in adata.layers and info.get("layer") == "counts":
+        adata.layers["counts"] = adata.X.copy()
+    layer = "counts" if "counts" in adata.layers else None
+    try:
+        sc.experimental.pp.normalize_pearson_residuals(adata, layer=layer)
+    except Exception as exc:
+        log.warning("pearson residuals failed (%s); falling back to log1p", exc)
+        normalize_log1p(adata)
+        adata.uns["normalization"] = {
+            "method": "log1p",
+            "applied": True,
+            "requested": "pearson",
+            "note": str(exc),
+        }
+        return adata
+    adata.uns["normalization"] = {"method": "pearson_residuals", "applied": True}
+    adata.uns["expression_layer"] = {"layer": "scaled", "reason": "pearson_residuals"}
+    return adata
+
+
+def _normalize_sctransform_r(adata) -> bool:
+    """Attempt Seurat::SCTransform via Rscript. Returns True on success."""
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    if not shutil.which("Rscript"):
+        return False
+    r_script = Path(__file__).resolve().parent / "r" / "sctransform.R"
+    if not r_script.is_file():
+        return False
+    tmp = Path(tempfile.mkdtemp(prefix="scagent_sct_"))
+    try:
+        inp = tmp / "in.h5ad"
+        out = tmp / "out.h5ad"
+        adata.write_h5ad(inp)
+        proc = subprocess.run(
+            ["Rscript", str(r_script), str(inp), str(out)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if proc.returncode != 0 or not out.exists():
+            log.debug("sctransform.R failed: %s", proc.stderr or proc.stdout)
+            return False
+        import anndata as ad
+
+        loaded = ad.read_h5ad(out)
+        adata.X = loaded.X
+        for col in loaded.obs.columns:
+            if col not in adata.obs.columns:
+                adata.obs[col] = loaded.obs[col].to_numpy()
+        if "counts" not in adata.layers and "counts" in (loaded.layers or {}):
+            adata.layers["counts"] = loaded.layers["counts"]
+        adata.uns["normalization"] = {"method": "sctransform", "applied": True, "backend": "seurat_r"}
+        adata.uns["expression_layer"] = {"layer": "scaled", "reason": "sctransform"}
+        return True
+    except Exception as exc:
+        log.debug("sctransform failed: %s", exc)
+        return False
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def select_hvg(adata, *, n_top_genes: int | None = None, batch_key: str | None = None, flavor: str | None = None, random_state: int | None = None):
@@ -198,22 +340,44 @@ def maybe_regress_cell_cycle(adata, *, mode: str = "auto", tissue: str | None = 
     return adata
 
 
+def ambient_backend_available(method: str = "soupx") -> bool:
+    """True only when a real SoupX/DecontX R binding can run (currently unwired → False)."""
+    primary = "decontx" if "decontx" in str(method).lower() else "soupx"
+    try:
+        from rpy2.robjects.packages import importr
+
+        if primary == "soupx":
+            importr("SoupX")
+            # Import alone is insufficient until adjustCounts is wired.
+            return False
+        importr("celda")
+        return False
+    except Exception:
+        return False
+
+
 def choose_ambient(tissue: str | None, requested: str | None = None) -> str:
+    """Pick ambient method. Auto never requests SoupX/DecontX until a real backend is wired."""
     req = str(requested or "auto").lower()
     if req in {"none", "off", "skip"}:
         return "none"
-    if req in {"soupx", "decontx"}:
+    if req in {"soupx_heuristic", "decontx_heuristic"}:
         return req
-    t = str(tissue or "").lower()
-    if t in {"brain", "tumor"}:
-        return "soupx"
-    try:
-        cfg = load_config()
-        prof = (cfg.get("qc_profiles") or {}).get(t) or {}
-        if prof.get("ambient"):
+    if req in {"soupx", "decontx"}:
+        # Explicit user request is preserved; remove_ambient reports applied=False if unavailable.
+        return req
+    # auto: do not advertise SoupX for brain/tumor until R binding exists
+    if ambient_backend_available("soupx"):
+        t = str(tissue or "").lower()
+        if t in {"brain", "tumor"}:
             return "soupx"
-    except Exception:
-        pass
+        try:
+            cfg = load_config()
+            prof = (cfg.get("qc_profiles") or {}).get(t) or {}
+            if prof.get("ambient"):
+                return "soupx"
+        except Exception:
+            pass
     return "none"
 
 

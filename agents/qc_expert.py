@@ -62,6 +62,12 @@ def build_qc_strategy(state: dict) -> dict:
         remove_doublets = bool(qc_cfg_full.get("remove_doublets"))
     doublet_filter = str(state.get("doublet_filter") or qc_cfg_full.get("doublet_filter") or "high_conf")
     regress_cc = state.get("regress_cell_cycle") or qc_cfg_full.get("regress_cell_cycle") or "auto"
+    normalization = str(
+        state.get("normalization") or qc_cfg_full.get("normalization") or "log1p"
+    ).lower()
+    per_sample_qc = qc_cfg_full.get("per_sample")
+    if state.get("per_sample_qc") is not None:
+        per_sample_qc = bool(state.get("per_sample_qc"))
     extra_qc = list(prof.get("extra_qc") or [])
     if meta.get("need_hb_qc") and "hb" not in extra_qc:
         extra_qc.append("hb")
@@ -88,6 +94,8 @@ def build_qc_strategy(state: dict) -> dict:
         "doublet_methods_resolved": doublet_resolved,
         "ambient": ambient,
         "ambient_requested": ambient_req,
+        "normalization": normalization,
+        "per_sample_qc": per_sample_qc,
         "regress_cell_cycle": regress_cc,
         "mt_mad_side": "high",
         "overfilter_warn_pct": warn_pct,
@@ -100,17 +108,18 @@ def build_qc_strategy(state: dict) -> dict:
         "protocol": (
             f"QC method={method}（组织={tissue}）。禁止默认 mito%<5 / nFeature>200。\n"
             "1. calculate_qc_metrics(log1p=True) + Violin/Scatter\n"
-            "2. MAD 和/或 percentile 动态阈值；硬阈值仅当 config.qc.hard 非 null\n"
+            "2. MAD 和/或 percentile 动态阈值（多样本时 per-sample）；硬阈值仅当 config.qc.hard 非 null\n"
             f"3. pct_mt 单侧高；记录过滤比例，>{warn_pct}% 警告；组织说明：{prof.get('pct_mt_note') or ''}\n"
             f"4. 双细胞：Scrublet"
             + (
-                " + scDblFinder（无 R 则表达模拟）→ doublet_call 三级："
+                " + scDblFinder（无 R 则 count-simulation 启发式，非真 scDblFinder）→ doublet_call 三级："
                 "high_conf（两法一致且 score>0.8）| low_conf（仅一法）| singlet"
                 if len(doublet_resolved) > 1
                 else " → doublet_call：high_conf（score>0.8）| low_conf | singlet"
             )
             + f"；remove_doublets={remove_doublets} doublet_filter={doublet_filter}\n"
-            f"5. ambient={ambient}；cell cycle score + regress={regress_cc}\n"
+            f"5. ambient={ambient}（auto 在无真 SoupX 时为 none；显式 soupx 不可用则不改 counts）"
+            f"；normalization={normalization}；cell cycle regress={regress_cc}\n"
             f"6. imputation={imputation}（写入 layers['imputed']，不覆盖 X）"
         ),
     }

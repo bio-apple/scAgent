@@ -363,7 +363,7 @@ def _integration_metrics_block() -> str:
     )
 
 
-def _locked_qc(qc: dict, qc_vars: str) -> str:
+def _locked_qc(qc: dict, qc_vars: str, *, sample_key: str = "sample") -> str:
     method = str(qc.get("method") or "mad")
     nmads = int(qc.get("nmads") or 5)
     pct = qc.get("percentile") or {}
@@ -380,6 +380,8 @@ def _locked_qc(qc: dict, qc_vars: str) -> str:
     hard_gmin_s = "None" if hard_gmin is None else str(int(hard_gmin))
     hard_gmax_s = "None" if hard_gmax is None else str(int(hard_gmax))
     warn_pct = int(qc.get("overfilter_warn_pct") or 30)
+    per_sample = qc.get("per_sample_qc")
+    per_sample_s = "None" if per_sample is None else str(bool(per_sample))
     return dedent(
         f"""\
         {LOCKED_START}
@@ -388,6 +390,8 @@ def _locked_qc(qc: dict, qc_vars: str) -> str:
         HARD_PCT_MT = {hard_mt_s}
         HARD_N_GENES_MIN = {hard_gmin_s}
         HARD_N_GENES_MAX = {hard_gmax_s}
+        PER_SAMPLE_QC = {per_sample_s}
+        SAMPLE_KEY_QC = {sample_key!r}
         sc.pp.calculate_qc_metrics(
             adata, qc_vars={qc_vars}, percent_top=None, log1p=True, inplace=True
         )
@@ -402,8 +406,7 @@ def _locked_qc(qc: dict, qc_vars: str) -> str:
         sc.pl.scatter(adata, x="total_counts", y="n_genes_by_counts", save="_qc_scatter_counts.png", show=False)
         sc.pl.scatter(adata, x="total_counts", y="pct_counts_mt", save="_qc_scatter_mt.png", show=False)
 
-        def mad_outlier(metric, nmads={nmads}, side="two"):
-            x = adata.obs[metric].to_numpy()
+        def mad_outlier_arr(x, nmads={nmads}, side="two"):
             med = np.median(x)
             mad = median_abs_deviation(x)
             if mad == 0:
@@ -414,8 +417,7 @@ def _locked_qc(qc: dict, qc_vars: str) -> str:
                 return x < (med - nmads * mad)
             return (x < med - nmads * mad) | (x > med + nmads * mad)
 
-        def percentile_outlier(metric, low=None, high=None):
-            x = adata.obs[metric].to_numpy()
+        def percentile_outlier_arr(x, low=None, high=None):
             mask = np.zeros(len(x), dtype=bool)
             if low is not None:
                 mask |= x < np.percentile(x, low)
@@ -423,22 +425,36 @@ def _locked_qc(qc: dict, qc_vars: str) -> str:
                 mask |= x > np.percentile(x, high)
             return mask
 
+        def _qc_outlier_mask(obs):
+            mask = np.zeros(len(obs), dtype=bool)
+            if QC_METHOD in ("mad", "hybrid"):
+                mask |= mad_outlier_arr(obs["pct_counts_mt"].to_numpy(), side="high")
+                mask |= mad_outlier_arr(obs["log1p_total_counts"].to_numpy(), side="two")
+                mask |= mad_outlier_arr(obs["log1p_n_genes_by_counts"].to_numpy(), side="two")
+            if QC_METHOD in ("percentile", "hybrid"):
+                mask |= percentile_outlier_arr(obs["n_genes_by_counts"].to_numpy(), low={p_g_lo}, high={p_g_hi})
+                mask |= percentile_outlier_arr(obs["total_counts"].to_numpy(), low={p_c_lo}, high={p_c_hi})
+                mask |= percentile_outlier_arr(obs["pct_counts_mt"].to_numpy(), high={p_mt})
+            if HARD_PCT_MT is not None:
+                mask |= obs["pct_counts_mt"].to_numpy() > HARD_PCT_MT
+            if HARD_N_GENES_MIN is not None:
+                mask |= obs["n_genes_by_counts"].to_numpy() < HARD_N_GENES_MIN
+            if HARD_N_GENES_MAX is not None:
+                mask |= obs["n_genes_by_counts"].to_numpy() > HARD_N_GENES_MAX
+            return mask
+
         n_before = int(adata.n_obs)
+        _do_per = PER_SAMPLE_QC if PER_SAMPLE_QC is not None else (
+            SAMPLE_KEY_QC in adata.obs.columns and int(adata.obs[SAMPLE_KEY_QC].nunique()) > 1
+        )
         outlier = np.zeros(n_before, dtype=bool)
-        if QC_METHOD in ("mad", "hybrid"):
-            outlier |= mad_outlier("pct_counts_mt", side="high")
-            outlier |= mad_outlier("log1p_total_counts", side="two")
-            outlier |= mad_outlier("log1p_n_genes_by_counts", side="two")
-        if QC_METHOD in ("percentile", "hybrid"):
-            outlier |= percentile_outlier("n_genes_by_counts", low={p_g_lo}, high={p_g_hi})
-            outlier |= percentile_outlier("total_counts", low={p_c_lo}, high={p_c_hi})
-            outlier |= percentile_outlier("pct_counts_mt", high={p_mt})
-        if HARD_PCT_MT is not None:
-            outlier |= adata.obs["pct_counts_mt"].to_numpy() > HARD_PCT_MT
-        if HARD_N_GENES_MIN is not None:
-            outlier |= adata.obs["n_genes_by_counts"].to_numpy() < HARD_N_GENES_MIN
-        if HARD_N_GENES_MAX is not None:
-            outlier |= adata.obs["n_genes_by_counts"].to_numpy() > HARD_N_GENES_MAX
+        if _do_per and SAMPLE_KEY_QC in adata.obs.columns:
+            for _s in adata.obs[SAMPLE_KEY_QC].astype(str).unique():
+                _m = (adata.obs[SAMPLE_KEY_QC].astype(str) == str(_s)).to_numpy()
+                outlier[_m] = _qc_outlier_mask(adata.obs.loc[_m])
+            print("QC_PER_SAMPLE", SAMPLE_KEY_QC)
+        else:
+            outlier = _qc_outlier_mask(adata.obs)
         adata.obs["outlier"] = outlier
         n_out = int(adata.obs["outlier"].sum())
         pct_removed = 100.0 * n_out / max(n_before, 1)
@@ -536,7 +552,8 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         return "\n".join(out)
 
     load_py = _ind_body(_load_block(path, n_cells=None if n_cells is None else int(n_cells)), 4)
-    locked_py = _ind_body(_locked_qc(qc, qc_vars).strip("\n"), 4)
+    locked_py = _ind_body(_locked_qc(qc, qc_vars, sample_key=str(meta.get("sample_key") or "sample")).strip("\n"), 4)
+    norm_method = str(qc.get("normalization") or "log1p")
     tpl = dedent(
         """\
         # scAgent phase 1: QC + preprocess. Tissue=__TISSUE__, species=__SPECIES__.
@@ -613,14 +630,15 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         print("SCAGENT_X_LAYER:" + json.dumps({k: _xlayer.get(k) for k in ("layer", "x_max", "sparsity", "uns_log1p", "reason")}))
         if _xlayer.get("layer") == "scaled":
             raise ValueError("adata.X is scaled; restore counts (layers['counts']) before QC normalize")
-        if _xlayer.get("layer") == "log1p":
+        from scagent.preprocess import normalize_expression
+        if _xlayer.get("layer") == "log1p" and __NORM_METHOD__ in ("log1p", "lognorm", "lognormalize"):
             print("SCAGENT_WARN: skip normalize_total/log1p; X already log1p")
+            adata.uns["normalization"] = {"method": "log1p", "applied": False, "reason": "already_log1p"}
         else:
-            if "counts" not in adata.layers:
+            if "counts" not in adata.layers and _xlayer.get("layer") == "counts":
                 adata.layers["counts"] = adata.X.copy()
-            if _xlayer.get("layer") != "normalized":
-                sc.pp.normalize_total(adata, target_sum=__TARGET_SUM__)
-            sc.pp.log1p(adata)
+            normalize_expression(adata, method=__NORM_METHOD__, target_sum=__TARGET_SUM__)
+            print("normalization=" + str((adata.uns.get("normalization") or {}).get("method")))
         __CELL_CYCLE__
         __IMPUTE__
         from scagent.preprocess import select_hvg
@@ -636,10 +654,12 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
             "pct_removed": pct_removed,
             "nmads": __NMADS__,
             "qc_method": __QC_METHOD__,
+            "normalization": (adata.uns.get("normalization") or {}).get("method") or __NORM_METHOD__,
             "imputation": __IMPUTE_METHOD__,
             "ambient": __AMBIENT_METHOD__,
             "ambient_applied": bool((adata.uns.get("ambient") or {}).get("applied")),
             "ambient_backend": (adata.uns.get("ambient") or {}).get("method"),
+            "ambient_requested": (adata.uns.get("ambient") or {}).get("requested"),
             "r_qc_used": bool(_R_QC),
             "doublet_rate": doublet_rate,
             "doublet_rate_high_conf": doublet_rate_high_conf,
@@ -649,6 +669,8 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
             "doublet_status": doublet_status,
             "doublet_agreement": doublet_agreement,
             "doublet_methods": doublet_engines,
+            "doublet_second_backend": (adata.uns.get("doublets") or {}).get("second_backend"),
+            "doublet_second_is_heuristic": bool((adata.uns.get("doublets") or {}).get("second_is_heuristic")),
             "doublet_filter": doublet_filter_applied,
             "remove_doublets": REMOVE_DOUBLETS,
             "seed": SEED,
@@ -678,6 +700,7 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         .replace("__CELL_CYCLE__", _cell_cycle_block(str(species), regress_cc, str(tissue)))
         .replace("__NMADS__", str(nmads))
         .replace("__QC_METHOD__", json.dumps(str(qc.get("method") or "mad")))
+        .replace("__NORM_METHOD__", json.dumps(norm_method))
         .replace("__IMPUTE__", _impute_block(impute_method))
         .replace("__IMPUTE_METHOD__", json.dumps(impute_method))
         .replace("__AMBIENT_METHOD__", json.dumps(ambient_method))
@@ -849,6 +872,8 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             f"""\
             resolutions = {res_list!r}
             sil_scores = {{}}
+            ncl_scores = {{}}
+            marker_scores = {{}}
             Xemb = None
             for _k in ("X_pca_harmony", "X_scVI", "X_scanorama", "X_pca"):
                 if _k in adata.obsm:
@@ -856,10 +881,12 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
                     break
             if Xemb is None:
                 Xemb = adata.obsm["X_pca"]
+            from scagent.analysis import marker_interpretability_score, choose_leiden_resolution
             for r in resolutions:
                 key = "leiden_r" + str(r)
                 sc.tl.leiden(adata, resolution=r, key_added=key)
-                ncl = adata.obs[key].nunique()
+                ncl = int(adata.obs[key].nunique())
+                ncl_scores[r] = ncl
                 print("resolution=" + str(r) + " n_clusters=" + str(ncl))
                 try:
                     from sklearn.metrics import silhouette_score
@@ -867,9 +894,19 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
                         sil_scores[r] = float(silhouette_score(Xemb, adata.obs[key].astype(str), sample_size=min(5000, adata.n_obs)))
                 except Exception:
                     pass
-            if sil_scores:
-                chosen_resolution = max(sil_scores, key=sil_scores.get)
+                try:
+                    marker_scores[r] = float(marker_interpretability_score(adata, key))
+                except Exception:
+                    pass
+            if sil_scores or marker_scores:
+                chosen_resolution, _res_detail = choose_leiden_resolution(
+                    sil_scores, ncl_scores, marker_scores=marker_scores or None, default={res_default}
+                )
                 print("silhouette", sil_scores)
+                print("marker_interpretability", marker_scores)
+                print("resolution_joint", _res_detail.get("scores"))
+                print("chosen_resolution", chosen_resolution, "reason=", _res_detail.get("reason"))
+                adata.uns["leiden_resolution_selection"] = _res_detail
             else:
                 chosen_resolution = {res_default}
                 print("SCAGENT_WARN: sklearn silhouette unavailable; using resolution", chosen_resolution)
@@ -926,6 +963,34 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             print("SCAGENT_WARN: " + str(CATALOG_WARN))
         TISSUE = __TISSUE_NAME__
         IMMUNE_TISSUES = set(["pbmc", "blood", "immune"])
+        _tissue_l = str(TISSUE).lower().strip()
+        ANNOTATION_SKIPPED = _tissue_l in {"", "unknown", "default", "none"} or not MARKERS
+        if ANNOTATION_SKIPPED:
+            _reason = CATALOG_WARN or "tissue missing/unknown or empty marker catalog"
+            print("SCAGENT_WARN: annotation skipped — " + str(_reason))
+            print("SCAGENT_ANNOTATION_STATUS: unannotated")
+            adata.obs["cell_type"] = "unannotated"
+            adata.obs["marker_label"] = "unannotated"
+            adata.obs["deg_label"] = "unannotated"
+            adata.obs["annotation_status"] = "unannotated"
+            adata.uns["annotation"] = {
+                "status": "unannotated",
+                "reason": str(_reason),
+                "tissue": TISSUE,
+                "hint": "re-run with --tissue <organ> to enable CellTypist + marker catalog",
+            }
+            Path("annotation_evidence.json").write_text(
+                json.dumps(
+                    {
+                        "status": "unannotated",
+                        "reason": str(_reason),
+                        "tissue": TISSUE,
+                        "n_clusters": int(adata.obs["leiden"].nunique()) if "leiden" in adata.obs else 0,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
         expr = adata.raw.to_adata() if adata.raw is not None else adata
         gene_to_idx = {g: i for i, g in enumerate(map(str, expr.var_names))}
 
@@ -956,88 +1021,92 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         evidence_rows = []
         cluster_ann = {}
         cluster_lin = {}
-        if not MARKERS:
-            print("SCAGENT_WARN: empty marker catalog; dual_ok will be False")
-        for cl in sorted(adata.obs["leiden"].astype(str).unique()):
-            mask = (adata.obs["leiden"].astype(str) == cl).to_numpy()
-            best = None
-            best_score = -1.0
-            best_dual = {"dual_ok": False}
-            for ct in MARKERS:
-                pos = ct.get("positive") or []
-                neg = ct.get("negative") or []
-                if len(pos) < 2:
-                    continue
-                pos_means = []
-                for g in pos:
-                    v = _gene_mean_vec(str(g))
-                    pos_means.append(float(v[mask].mean()) if v is not None else None)
-                neg_means = []
-                for g in neg:
-                    v = _gene_mean_vec(str(g))
-                    neg_means.append(float(v[mask].mean()) if v is not None else None)
-                dual = dual_validate_expression(pos_means, neg_means)
-                present_pos = [m for m in pos_means if m is not None]
-                present_neg = [m for m in neg_means if m is not None]
-                if len(present_pos) < 2:
-                    continue
-                score = float(np.mean(present_pos) - (np.mean(present_neg) if present_neg else 0.0))
-                depth = len(ct.get("lineage") or [ct.get("name")])
-                score = score + 0.01 * depth + (1.0 if dual.get("dual_ok") else 0.0)
-                if score > best_score:
-                    best_score = score
-                    best = ct
-                    best_dual = dual
-            dual_ok = bool(best_dual.get("dual_ok"))
-            lin = list((best or {}).get("lineage") or []) if dual_ok else []
-            label = (best or {}).get("name") if dual_ok else "unknown"
-            cluster_ann[cl] = label
-            cluster_lin[cl] = lin
-            evidence_rows.append(
-                {
-                    "cluster": cl,
-                    "marker_label": label,
-                    "lineage": lin,
-                    "cl_id": (best or {}).get("cl_id") if dual_ok else None,
-                    "positive": (best or {}).get("positive"),
-                    "negative": (best or {}).get("negative"),
-                    "dual_ok": dual_ok,
-                    "dual_detail": best_dual,
-                    "auto_label": None,
-                }
-            )
-        adata.obs["marker_label"] = adata.obs["leiden"].astype(str).map(cluster_ann)
-        max_depth = max((len(v) for v in cluster_lin.values()), default=1)
-        for i in range(max_depth):
-            col = "cell_type_l" + str(i + 1)
-            adata.obs[col] = adata.obs["leiden"].astype(str).map(lambda c, i=i: (cluster_lin.get(c) or ["unknown"])[i] if i < len(cluster_lin.get(c) or []) else (cluster_lin.get(c) or ["unknown"])[-1] if cluster_lin.get(c) else "unknown")
-        _auto_src = "scagent_annotation" if "scagent_annotation" in adata.obs.columns else "celltypist_label"
-        fuse_annotation(adata, sources=("marker_label", _auto_src, "deg_label"))
-        apply_ontology_ids(adata, {"cell_types": MARKERS}, label_col="cell_type")
-        _dual_rate = float(np.mean([1.0 if r.get("dual_ok") else 0.0 for r in evidence_rows])) if evidence_rows else 0.0
-        if "scagent_annotation" in adata.obs:
-            auto = adata.obs["scagent_annotation"].astype(str)
-        elif "celltypist_label" in adata.obs:
-            auto = adata.obs["celltypist_label"].astype(str)
+        _dual_rate = 0.0
+        if ANNOTATION_SKIPPED:
+            print("SCAGENT_WARN: skipping marker dual-validation and fusion (unannotated)")
         else:
-            auto = adata.obs["marker_label"].astype(str)
-        if "celltypist_label" in adata.obs or "scagent_annotation" in adata.obs:
-            mark = adata.obs["marker_label"].astype(str)
-            adata.obs["annotation_conflict"] = (auto != mark) & (mark != "unknown") & (auto != "unassigned")
-            n_conf = int(adata.obs["annotation_conflict"].sum())
-            if n_conf:
-                print("SCAGENT_WARN: marker vs auto conflict in " + str(n_conf) + " cells; fusion status in annotation_status")
-            for row in evidence_rows:
-                cl = row["cluster"]
-                sub = adata.obs["leiden"].astype(str) == cl
-                row["auto_label"] = (
-                    str(adata.obs.loc[sub, "scagent_annotation"].mode().iloc[0])
-                    if "scagent_annotation" in adata.obs and sub.any()
-                    else str(adata.obs.loc[sub, "celltypist_label"].mode().iloc[0]) if sub.any() else None
+            if not MARKERS:
+                print("SCAGENT_WARN: empty marker catalog; dual_ok will be False")
+            for cl in sorted(adata.obs["leiden"].astype(str).unique()):
+                mask = (adata.obs["leiden"].astype(str) == cl).to_numpy()
+                best = None
+                best_score = -1.0
+                best_dual = {"dual_ok": False}
+                for ct in MARKERS:
+                    pos = ct.get("positive") or []
+                    neg = ct.get("negative") or []
+                    if len(pos) < 2:
+                        continue
+                    pos_means = []
+                    for g in pos:
+                        v = _gene_mean_vec(str(g))
+                        pos_means.append(float(v[mask].mean()) if v is not None else None)
+                    neg_means = []
+                    for g in neg:
+                        v = _gene_mean_vec(str(g))
+                        neg_means.append(float(v[mask].mean()) if v is not None else None)
+                    dual = dual_validate_expression(pos_means, neg_means)
+                    present_pos = [m for m in pos_means if m is not None]
+                    present_neg = [m for m in neg_means if m is not None]
+                    if len(present_pos) < 2:
+                        continue
+                    score = float(np.mean(present_pos) - (np.mean(present_neg) if present_neg else 0.0))
+                    depth = len(ct.get("lineage") or [ct.get("name")])
+                    score = score + 0.01 * depth + (1.0 if dual.get("dual_ok") else 0.0)
+                    if score > best_score:
+                        best_score = score
+                        best = ct
+                        best_dual = dual
+                dual_ok = bool(best_dual.get("dual_ok"))
+                lin = list((best or {}).get("lineage") or []) if dual_ok else []
+                label = (best or {}).get("name") if dual_ok else "unknown"
+                cluster_ann[cl] = label
+                cluster_lin[cl] = lin
+                evidence_rows.append(
+                    {
+                        "cluster": cl,
+                        "marker_label": label,
+                        "lineage": lin,
+                        "cl_id": (best or {}).get("cl_id") if dual_ok else None,
+                        "positive": (best or {}).get("positive"),
+                        "negative": (best or {}).get("negative"),
+                        "dual_ok": dual_ok,
+                        "dual_detail": best_dual,
+                        "auto_label": None,
+                    }
                 )
-                row["fused"] = str(adata.obs.loc[sub, "cell_type"].mode().iloc[0]) if sub.any() else None
-                row["conflict"] = bool(adata.obs.loc[sub, "annotation_conflict"].any()) if "annotation_conflict" in adata.obs else False
-        Path("annotation_evidence.json").write_text(json.dumps(evidence_rows, indent=2), encoding="utf-8")
+            adata.obs["marker_label"] = adata.obs["leiden"].astype(str).map(cluster_ann)
+            max_depth = max((len(v) for v in cluster_lin.values()), default=1)
+            for i in range(max_depth):
+                col = "cell_type_l" + str(i + 1)
+                adata.obs[col] = adata.obs["leiden"].astype(str).map(lambda c, i=i: (cluster_lin.get(c) or ["unknown"])[i] if i < len(cluster_lin.get(c) or []) else (cluster_lin.get(c) or ["unknown"])[-1] if cluster_lin.get(c) else "unknown")
+            _auto_src = "scagent_annotation" if "scagent_annotation" in adata.obs.columns else "celltypist_label"
+            fuse_annotation(adata, sources=("marker_label", _auto_src, "deg_label"))
+            apply_ontology_ids(adata, {"cell_types": MARKERS}, label_col="cell_type")
+            _dual_rate = float(np.mean([1.0 if r.get("dual_ok") else 0.0 for r in evidence_rows])) if evidence_rows else 0.0
+            if "scagent_annotation" in adata.obs:
+                auto = adata.obs["scagent_annotation"].astype(str)
+            elif "celltypist_label" in adata.obs:
+                auto = adata.obs["celltypist_label"].astype(str)
+            else:
+                auto = adata.obs["marker_label"].astype(str)
+            if "celltypist_label" in adata.obs or "scagent_annotation" in adata.obs:
+                mark = adata.obs["marker_label"].astype(str)
+                adata.obs["annotation_conflict"] = (auto != mark) & (mark != "unknown") & (auto != "unassigned")
+                n_conf = int(adata.obs["annotation_conflict"].sum())
+                if n_conf:
+                    print("SCAGENT_WARN: marker vs auto conflict in " + str(n_conf) + " cells; fusion status in annotation_status")
+                for row in evidence_rows:
+                    cl = row["cluster"]
+                    sub = adata.obs["leiden"].astype(str) == cl
+                    row["auto_label"] = (
+                        str(adata.obs.loc[sub, "scagent_annotation"].mode().iloc[0])
+                        if "scagent_annotation" in adata.obs and sub.any()
+                        else str(adata.obs.loc[sub, "celltypist_label"].mode().iloc[0]) if sub.any() else None
+                    )
+                    row["fused"] = str(adata.obs.loc[sub, "cell_type"].mode().iloc[0]) if sub.any() else None
+                    row["conflict"] = bool(adata.obs.loc[sub, "annotation_conflict"].any()) if "annotation_conflict" in adata.obs else False
+            Path("annotation_evidence.json").write_text(json.dumps(evidence_rows, indent=2), encoding="utf-8")
         __PSEUDOBULK__
         _color_candidates = [
             "leiden",
@@ -1085,12 +1154,15 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             "marker_n_overlap": (adata.uns.get("scagent_markers") or {}).get("n_overlap"),
             "marker_jaccard": (adata.uns.get("scagent_markers") or {}).get("jaccard"),
             "seed": SEED,
+            "annotation_status": (adata.uns.get("annotation") or {}).get("status") or ("ok" if not ANNOTATION_SKIPPED else "unannotated"),
+            "annotation_skipped": bool(ANNOTATION_SKIPPED),
+            "annotation_skip_reason": (adata.uns.get("annotation") or {}).get("reason"),
             "annotation_dual_validation": bool(_dual_rate >= 0.5 and any(r.get("dual_ok") for r in evidence_rows)),
             "annotation_dual_rate": float(_dual_rate),
             "annotation_n_dual_ok": int(sum(1 for r in evidence_rows if r.get("dual_ok"))),
             "r_reference_used": bool(_R_REF),
-            "hierarchical_annotation": True,
-            "annotation_fusion": True,
+            "hierarchical_annotation": (not ANNOTATION_SKIPPED),
+            "annotation_fusion": (not ANNOTATION_SKIPPED),
             "trajectory_verdict": (adata.uns.get("scagent_trajectory") or {}).get("verdict"),
             "trajectory_methods": (adata.uns.get("scagent_trajectory") or {}).get("methods"),
             "trajectory_score": (adata.uns.get("scagent_trajectory") or {}).get("score"),

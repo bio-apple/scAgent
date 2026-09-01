@@ -298,7 +298,10 @@ def detect_doublets(
             adata.obs["doublet_sim"] = calls["sim"]
             engines.append("sim")
             if "scdblfinder" in want or "both" in want:
-                print("SCAGENT_WARN: scDblFinder unavailable; used count-simulation cross-check")
+                print(
+                    "SCAGENT_WARN: scDblFinder unavailable; used count-simulation "
+                    "(NOT scDblFinder/DoubletFinder) as cross-check"
+                )
 
     n = adata.n_obs
     if len(calls) >= 2:
@@ -328,6 +331,11 @@ def detect_doublets(
     rate_high = float(tier_counts[TIER_HIGH] / n) if n else 0.0
     rate_low = float(tier_counts[TIER_LOW] / n) if n else 0.0
     filt = str(doublet_filter or "high_conf").lower().strip()
+    second_backend = None
+    if "scdblfinder" in engines:
+        second_backend = "scdblfinder"
+    elif "sim" in engines:
+        second_backend = "count_simulation"
     info = {
         "status": status,
         "rate": rate,
@@ -335,6 +343,8 @@ def detect_doublets(
         "rate_low_conf": round(rate_low, 4),
         "agreement": round(float(agree), 4),
         "methods": engines,
+        "second_backend": second_backend,
+        "second_is_heuristic": second_backend == "count_simulation",
         "n_discordant": int(np.sum(disc)),
         "n_high_conf": tier_counts[TIER_HIGH],
         "n_low_conf": tier_counts[TIER_LOW],

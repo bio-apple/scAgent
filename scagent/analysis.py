@@ -78,6 +78,100 @@ def leiden(adata, *, resolution: float | None = None, key_added: str = "leiden",
     return adata
 
 
+def choose_leiden_resolution(
+    sil_scores: dict[float, float],
+    n_clusters: dict[float, int],
+    *,
+    marker_scores: dict[float, float] | None = None,
+    min_clusters: int = 3,
+    max_clusters: int = 25,
+    default: float = 0.6,
+) -> tuple[float, dict]:
+    """Joint resolution pick: silhouette + cluster-count prior + optional marker interpretability.
+
+    Penalizes 1–2 cluster solutions that often win pure silhouette on homogeneous embeddings.
+    Returns (chosen_resolution, detail_dict).
+    """
+    if not sil_scores and not marker_scores:
+        return float(default), {"reason": "no_scores", "chosen": float(default)}
+
+    keys = sorted(set(sil_scores) | set(marker_scores or {}) | set(n_clusters))
+    if not keys:
+        return float(default), {"reason": "empty", "chosen": float(default)}
+
+    sil_vals = list(sil_scores.values()) if sil_scores else [0.0]
+    sil_min, sil_max = min(sil_vals), max(sil_vals)
+    sil_span = (sil_max - sil_min) or 1.0
+    mark = marker_scores or {}
+    mark_vals = list(mark.values()) if mark else [0.0]
+    mark_min, mark_max = min(mark_vals), max(mark_vals)
+    mark_span = (mark_max - mark_min) or 1.0
+
+    joint: dict[float, float] = {}
+    detail: dict[float, dict] = {}
+    for r in keys:
+        ncl = int(n_clusters.get(r) or 0)
+        sil = float(sil_scores.get(r, sil_min))
+        sil_n = (sil - sil_min) / sil_span
+        mark_n = (float(mark.get(r, mark_min)) - mark_min) / mark_span if mark else 0.0
+        if ncl < min_clusters:
+            # Strong penalty: 1–2 cluster solutions often win pure silhouette on bland embeddings.
+            size_prior = 0.1 * (ncl / max(min_clusters, 1))
+        elif ncl > max_clusters:
+            size_prior = max(0.0, 1.0 - 0.05 * (ncl - max_clusters))
+        else:
+            size_prior = 1.0
+        # weight: silhouette 0.45, marker 0.35 (or fold into sil if absent), size 0.20
+        if mark:
+            score = 0.45 * sil_n + 0.35 * mark_n + 0.20 * size_prior
+        else:
+            # Without markers, size prior must be able to overturn modest sil gaps.
+            score = 0.55 * sil_n + 0.45 * size_prior
+        joint[r] = score
+        detail[r] = {
+            "silhouette": sil,
+            "n_clusters": ncl,
+            "marker_score": float(mark.get(r)) if r in mark else None,
+            "size_prior": round(size_prior, 3),
+            "joint": round(score, 4),
+        }
+    chosen = max(joint, key=joint.get)
+    return float(chosen), {"chosen": float(chosen), "scores": detail, "reason": "joint_silhouette_marker_size"}
+
+
+def marker_interpretability_score(adata, cluster_key: str, *, n_genes: int = 20) -> float:
+    """Cheap proxy: mean absolute z-score of top HVGs across cluster means (higher = more separable)."""
+    import numpy as np
+
+    if cluster_key not in adata.obs or adata.obs[cluster_key].nunique() < 2:
+        return 0.0
+    genes = None
+    if "highly_variable" in adata.var.columns:
+        hv = adata.var_names[adata.var["highly_variable"].to_numpy()]
+        genes = list(map(str, hv[: max(n_genes * 5, n_genes)]))
+    if not genes:
+        genes = list(map(str, adata.var_names[: min(200, adata.n_vars)]))
+    genes = genes[:200]
+    try:
+        X = adata[:, genes].X
+        if hasattr(X, "toarray"):
+            X = X.toarray()
+        X = np.asarray(X, dtype=float)
+    except Exception:
+        return 0.0
+    labels = adata.obs[cluster_key].astype(str).to_numpy()
+    means = []
+    for lab in sorted(set(labels)):
+        means.append(X[labels == lab].mean(axis=0))
+    M = np.vstack(means)
+    if M.shape[0] < 2:
+        return 0.0
+    # per-gene std across clusters; average top-n
+    spread = np.std(M, axis=0)
+    top = np.sort(spread)[-min(n_genes, len(spread)) :]
+    return float(np.mean(top)) if top.size else 0.0
+
+
 def umap(adata, *, random_state: int | None = None):
     import scanpy as sc
 
