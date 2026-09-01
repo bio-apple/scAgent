@@ -58,14 +58,46 @@ def _detect_platform(path: Path) -> str:
 
 
 def _detect_species_from_genes(genes: list[str]) -> str:
-    sample = genes[: min(len(genes), 5000)]
-    mt_human = sum(g.startswith("MT-") for g in sample)
-    mt_mouse = sum(g.startswith("mt-") for g in sample)
+    # Full scan: 10x gene order follows feature TSV, not symbol sort (MT-* may be mid-matrix).
+    mt_human = 0
+    mt_mouse = 0
+    for g in genes:
+        if g.startswith("MT-"):
+            mt_human += 1
+        elif g.startswith("mt-"):
+            mt_mouse += 1
     if mt_human > mt_mouse and mt_human > 0:
         return "human"
     if mt_mouse > mt_human and mt_mouse > 0:
         return "mouse"
     return "unknown"
+
+
+def _peek_10x_gene_symbols(mtx_dir: Path, *, max_rows: int = 50000) -> list[str]:
+    """Read gene symbols from genes.tsv / features.tsv without loading the matrix."""
+    import gzip
+
+    mtx_dir = Path(mtx_dir)
+    path = None
+    for name in ("features.tsv.gz", "features.tsv", "genes.tsv.gz", "genes.tsv"):
+        cand = mtx_dir / name
+        if cand.is_file():
+            path = cand
+            break
+    if path is None:
+        return []
+    opener = gzip.open if path.suffix == ".gz" else open
+    genes: list[str] = []
+    with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
+        for i, line in enumerate(fh):
+            if i >= max_rows:
+                break
+            parts = line.rstrip("\n").split("\t")
+            # features.tsv: id, symbol, type; genes.tsv: id, symbol
+            sym = parts[1] if len(parts) > 1 else parts[0]
+            if sym:
+                genes.append(sym)
+    return genes
 
 
 _CC_GENES = {
@@ -86,7 +118,7 @@ _CC_GENES = {
 
 def gene_composition(genes: list[str]) -> dict[str, Any]:
     """Presence of MT / ribo / HB / cell-cycle gene symbols (not expression)."""
-    sample = [str(g) for g in genes[: min(len(genes), 8000)]]
+    sample = [str(g) for g in genes]
     n = max(len(sample), 1)
     up = [g.upper() for g in sample]
     n_mt = sum(g.startswith("MT-") or g.startswith("MT.") for g in up)
@@ -380,6 +412,10 @@ def _inspect_one_path(path: Path, meta: dict[str, Any], *, species: str | None, 
                 meta["n_cells"] = n_bc
             if n_ft:
                 meta["n_genes"] = n_ft
+            genes = _peek_10x_gene_symbols(mtx)
+            if genes and (species is None or meta.get("species") in {None, "unknown"}):
+                meta["species"] = _detect_species_from_genes(genes)
+                meta.update(gene_composition(genes))
             meta["notes"].append(f"Cell Ranger / 10x mtx: {mtx}")
         elif h5 is not None:
             n_cells, n_genes = peek_10x_h5_shape(h5)

@@ -667,7 +667,6 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         .replace("__SPECIES__", str(species))
         .replace("__ROUTER_QC__", _router_qc_bootstrap(str(path), meta, qc))
         .replace("__LOAD_INDENTED__", load_py)
-        .replace("__SAMPLE_KEY__", sample_key)
         .replace("__MT_PREFIX__", repr(mt_prefix))
         .replace("__HB_LINE__", hb_line)
         .replace("__QC_VARS__", qc_vars)
@@ -685,6 +684,8 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         .replace("__N_HVG__", str(int(p["n_hvg"])))
         .replace("__N_JOBS__", str(int(perf["n_jobs"])))
         .replace("__CACHE_ON__", "True" if perf["cache"] else "False")
+        # Must be last: scrublet/HVG blocks inject __SAMPLE_KEY__ placeholders.
+        .replace("__SAMPLE_KEY__", sample_key)
     )
 
 
@@ -1062,18 +1063,18 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             "integration_passed": integ_passed,
             "integration_plots": integ_plots,
             "celltypist_model": adata.uns.get("celltypist_model"),
-            "scagent_annotation_method": (adata.uns.get("scagent_annotation") or {{}}).get("method"),
-            "scagent_annotation_n_low_conf": (adata.uns.get("scagent_annotation") or {{}}).get("n_low_conf"),
-            "deg_engine": (adata.uns.get("pseudobulk_de") or {{}}).get("engine"),
-            "deg_n_sig": (adata.uns.get("pseudobulk_de") or {{}}).get("n_sig"),
-            "deg_engines": (adata.uns.get("pseudobulk_de") or {{}}).get("engines"),
-            "deg_n_overlap": (adata.uns.get("pseudobulk_de") or {{}}).get("n_overlap"),
-            "deg_jaccard": (adata.uns.get("pseudobulk_de") or {{}}).get("jaccard"),
-            "deg_crossvalidate": (adata.uns.get("pseudobulk_de") or {{}}).get("cross_validate"),
-            "marker_method": (adata.uns.get("scagent_markers") or {{}}).get("method"),
-            "marker_methods": (adata.uns.get("scagent_markers") or {{}}).get("methods"),
-            "marker_n_overlap": (adata.uns.get("scagent_markers") or {{}}).get("n_overlap"),
-            "marker_jaccard": (adata.uns.get("scagent_markers") or {{}}).get("jaccard"),
+            "scagent_annotation_method": (adata.uns.get("scagent_annotation") or {}).get("method"),
+            "scagent_annotation_n_low_conf": (adata.uns.get("scagent_annotation") or {}).get("n_low_conf"),
+            "deg_engine": (adata.uns.get("pseudobulk_de") or {}).get("engine"),
+            "deg_n_sig": (adata.uns.get("pseudobulk_de") or {}).get("n_sig"),
+            "deg_engines": (adata.uns.get("pseudobulk_de") or {}).get("engines"),
+            "deg_n_overlap": (adata.uns.get("pseudobulk_de") or {}).get("n_overlap"),
+            "deg_jaccard": (adata.uns.get("pseudobulk_de") or {}).get("jaccard"),
+            "deg_crossvalidate": (adata.uns.get("pseudobulk_de") or {}).get("cross_validate"),
+            "marker_method": (adata.uns.get("scagent_markers") or {}).get("method"),
+            "marker_methods": (adata.uns.get("scagent_markers") or {}).get("methods"),
+            "marker_n_overlap": (adata.uns.get("scagent_markers") or {}).get("n_overlap"),
+            "marker_jaccard": (adata.uns.get("scagent_markers") or {}).get("jaccard"),
             "seed": SEED,
             "annotation_dual_validation": bool(_dual_rate >= 0.5 and any(r.get("dual_ok") for r in evidence_rows)),
             "annotation_dual_rate": float(_dual_rate),
@@ -1081,10 +1082,10 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             "r_reference_used": bool(_R_REF),
             "hierarchical_annotation": True,
             "annotation_fusion": True,
-            "trajectory_verdict": (adata.uns.get("scagent_trajectory") or {{}}).get("verdict"),
-            "trajectory_methods": (adata.uns.get("scagent_trajectory") or {{}}).get("methods"),
-            "trajectory_score": (adata.uns.get("scagent_trajectory") or {{}}).get("score"),
-            "trajectory_confidence": (adata.uns.get("scagent_trajectory") or {{}}).get("confidence"),
+            "trajectory_verdict": (adata.uns.get("scagent_trajectory") or {}).get("verdict"),
+            "trajectory_methods": (adata.uns.get("scagent_trajectory") or {}).get("methods"),
+            "trajectory_score": (adata.uns.get("scagent_trajectory") or {}).get("score"),
+            "trajectory_confidence": (adata.uns.get("scagent_trajectory") or {}).get("confidence"),
             "adata_in": adata_in_summary,
             "adata_out": summarize_adata(adata, step="processed_output"),
         }
@@ -1157,15 +1158,14 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
     python_or_r = "if not _R_REF:\n" + _ind(python_path, 4) + "\nelse:\n" + _ind(r_path, 4)
 
     return (
-        tpl.replace("__SAMPLE_KEY__", sample_key)
-        .replace("__ROUTER_DN__", _router_downstream_bootstrap(meta, plan or {}))
+        tpl.replace("__ROUTER_DN__", _router_downstream_bootstrap(meta, plan or {}))
         .replace("__PYTHON_OR_R__", python_or_r)
         .replace("__PSEUDOBULK__", _pseudobulk_block(needs_pb, condition_key, sample_key, deg_engine, deg_cv, force_pb).strip("\n"))
         .replace("__SECOND_REF__", _second_ref_block().strip("\n"))
         .replace("__TRAJECTORY__", _trajectory_block(traj_mode).strip("\n"))
         .replace("__INTEG_METRICS__", _integration_metrics_block().strip("\n"))
         .replace("__MARKERS__", marker_json)
-        .replace("__CATALOG_WARN__", json.dumps(catalog.get("warning")))
+        .replace("__CATALOG_WARN__", repr(catalog.get("warning")))
         .replace("__INTEGRATOR__", repr(integrator))
         .replace("__TISSUE_NAME__", json.dumps(str(tissue)))
         .replace("__SEED__", str(int(p["seed"])))
@@ -1173,6 +1173,8 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         .replace("__N_PCS__", str(n_pcs))
         .replace("__N_JOBS__", str(int(perf["n_jobs"])))
         .replace("__CACHE_ON__", "True" if perf["cache"] else "False")
+        # Must be last: second_ref / integ_metrics inject __SAMPLE_KEY__.
+        .replace("__SAMPLE_KEY__", sample_key)
     )
 
 
