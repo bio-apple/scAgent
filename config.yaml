@@ -155,7 +155,7 @@ deg:
 modules:
   batch: auto                 # auto | none | harmony | scvi | cca | scanorama | bbknn
   imputation: none            # none | magic | alra
-  ambient: auto               # auto | none | soupx | decontx；brain/tumor 的 auto → soupx
+  ambient: auto               # auto | none | soupx | decontx；brain/tumor 的 auto → soupx（无真 SoupX 时不改 counts，除非显式 *_heuristic）
   trajectory: auto            # auto=按组织/spliced 层评估连续性；force=用户要轨迹也拟合；off=关
 
 # SciAgent Tool Router：R 优先，Python 仅后备。语言由本表硬编码，禁止 LLM 自选。

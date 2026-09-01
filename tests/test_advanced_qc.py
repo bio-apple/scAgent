@@ -58,15 +58,26 @@ def test_condition_de_requires_pseudobulk_impl():
         "tissue": "pbmc",
         "needs_pseudobulk": True,
         "condition_key": "condition",
+        "n_replicates": 2,
+        "force_pseudobulk_de": True,
     }
-    code = cluster_annotate_script(meta, {}, {"integrator": "harmony", "needs_pseudobulk": True, "condition_key": "condition"})
+    code = cluster_annotate_script(
+        meta,
+        {},
+        {
+            "integrator": "harmony",
+            "needs_pseudobulk": True,
+            "condition_key": "condition",
+            "force_pseudobulk_de": True,
+        },
+    )
     compile(code, "<pb>", "exec")
     assert "pseudobulk_de" in code
     assert "engine=" in code
     r = audit_code(code, meta, phase="downstream")
     assert r["has_pseudobulk_impl"] is True
     assert r["passed"] is True
-    bad = code.replace("pseudobulk_de", "wilcoxon_only")
+    bad = code.replace("pseudobulk_de(", "wilcoxon_only(")
     r2 = audit_code(bad, meta, phase="downstream")
     assert r2["passed"] is False
     assert any("pseudobulk" in x for x in r2["issues"])

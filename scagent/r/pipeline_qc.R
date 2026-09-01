@@ -1,5 +1,7 @@
 # Seurat QC + normalize → h5ad (scAgent R-first path)
 # Usage: Rscript pipeline_qc.R <input> <output_h5ad> [sample_key] [nmads]
+# NOTE: R QC is MAD filter only. Python must continue for doublet/ambient + QC figures
+# (templates set _R_QC and must NOT SystemExit after this script).
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 2) stop("usage: Rscript pipeline_qc.R input output.h5ad [sample_key] [nmads]")

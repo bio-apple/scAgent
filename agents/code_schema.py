@@ -195,7 +195,7 @@ def validate_script(
     pl = plan or {}
     if phase == "downstream" and force_pseudobulk_de(meta, pl):
         ck = str(meta.get("condition_key") or pl.get("condition_key") or "condition")
-        if "pseudobulk_de" not in text:
+        if "pseudobulk_de(" not in text:
             _add(
                 records,
                 f"强制 pseudobulk：存在 {ck!r} 且 n_replicates≥2，但脚本未调用 pseudobulk_de",

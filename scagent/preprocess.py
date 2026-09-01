@@ -239,42 +239,70 @@ def _estimate_rho(umi) -> float:
     return float(np.clip(0.05 + 0.15 * (1.0 - q10 / max(q90, 1e-9)), 0.02, 0.25))
 
 
-def remove_ambient(adata, method: str = "soupx", *, rho: float | None = None):
-    """Subtract ambient RNA. SoupX/DecontX via rpy2 if present; otherwise Python fallback on counts."""
+def remove_ambient(
+    adata,
+    method: str = "soupx",
+    *,
+    rho: float | None = None,
+    allow_heuristic: bool = False,
+):
+    """Subtract ambient RNA via real SoupX/DecontX when available.
+
+    Heuristic Python fallback does **not** mutate counts unless ``allow_heuristic=True``
+    or method is explicitly ``soupx_heuristic`` / ``decontx_heuristic``.
+    """
     method = (method or "none").lower()
     if method in {"none", "off", "skip"}:
+        adata.uns["ambient"] = {"method": "none", "applied": False}
         return adata
+    want_heuristic = method in {"soupx_heuristic", "decontx_heuristic"} or allow_heuristic
+    primary = "decontx" if "decontx" in method else "soupx"
     if "counts_raw" not in adata.layers:
         adata.layers["counts_raw"] = adata.X.copy()
-    used = method
     try:
-        if method == "soupx":
-            adata = _ambient_soupx_rpy2(adata) or _ambient_soupx_python(adata, rho=rho)
-            used = "soupx"
-        elif method == "decontx":
-            adata = _ambient_decontx_rpy2(adata) or _ambient_decontx_python(adata)
-            used = "decontx"
+        real = _ambient_soupx_rpy2(adata) if primary == "soupx" else _ambient_decontx_rpy2(adata)
+        if real is not None:
+            adata = real
+            info = dict(adata.uns.get("ambient") or {})
+            info.update({"method": primary, "applied": True, "backend": "rpy2"})
+            adata.uns["ambient"] = info
+            log.info("remove_ambient method=%s applied=True", primary)
+            return adata
+    except Exception as exc:
+        log.warning("remove_ambient %s rpy2 failed: %s", primary, exc)
+    if want_heuristic:
+        if primary == "decontx":
+            adata = _ambient_decontx_python(adata)
         else:
             adata = _ambient_soupx_python(adata, rho=rho)
-            used = "soupx_python"
-    except Exception as exc:
-        log.warning("remove_ambient %s failed, python fallback: %s", method, exc)
-        adata = _ambient_soupx_python(adata, rho=rho)
-        used = "soupx_python"
-    adata.uns["ambient"] = {**(adata.uns.get("ambient") or {}), "method": used}
-    log.info("remove_ambient method=%s", used)
+        info = dict(adata.uns.get("ambient") or {})
+        info["applied"] = True
+        info["requested"] = method
+        adata.uns["ambient"] = info
+        log.warning("remove_ambient applied heuristic fallback method=%s", info.get("method"))
+        return adata
+    adata.uns["ambient"] = {
+        "method": f"{primary}_unavailable",
+        "requested": method,
+        "applied": False,
+        "note": "SoupX/DecontX not available; counts unchanged (set allow_heuristic=True to force heuristic)",
+    }
+    log.warning("remove_ambient skipped: %s unavailable; counts unchanged", primary)
     return adata
 
 
 def _ambient_soupx_rpy2(adata):
+    """Real SoupX via rpy2. Returns None until wired to SoupX::autoEstCont / adjustCounts."""
     try:
         from rpy2.robjects.packages import importr  # noqa: F401
     except Exception:
         return None
+    # Package import alone is not SoupX — do not claim success.
     return None
 
 
 def _ambient_decontx_rpy2(adata):
+    """Real DecontX via rpy2. Returns None until wired to celda::decontX."""
     try:
         from rpy2.robjects.packages import importr  # noqa: F401
     except Exception:
@@ -302,7 +330,12 @@ def _ambient_soupx_python(adata, *, rho: float | None = None):
     corr.data = np.clip(corr.data, 0, None)
     corr.eliminate_zeros()
     adata.X = corr.astype(np.float32)
-    adata.uns["ambient"] = {"method": "soupx_python", "rho": rho, "n_ambient_cells": n_amb}
+    adata.uns["ambient"] = {
+        "method": "soupx_heuristic",
+        "rho": rho,
+        "n_ambient_cells": n_amb,
+        "applied": True,
+    }
     return adata
 
 
@@ -340,5 +373,5 @@ def _ambient_decontx_python(adata):
         _ = native
     adata.X = sp.csr_matrix(corr.astype(np.float32))
     adata.obs["decontx_cluster"] = labels.astype(str)
-    adata.uns["ambient"] = {"method": "decontx_python", "rho": 0.1, "k": k}
+    adata.uns["ambient"] = {"method": "decontx_heuristic", "rho": 0.1, "k": k, "applied": True}
     return adata

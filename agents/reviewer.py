@@ -36,7 +36,7 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
     has_dual = ("positive" in low and "negative" in low) or "dual" in low
     has_seed = "seed" in low
     has_pseudobulk_note = "pseudobulk" in low and ("fdr" in low or "padj" in low or "多重" in text)
-    has_pseudobulk_impl = "pseudobulk_de" in low or "get.aggregate" in low or "sc.get.aggregate" in low
+    has_pseudobulk_impl = "pseudobulk_de(" in low or "get.aggregate" in low or "sc.get.aggregate" in low
     has_ref2 = any(k in low for k in ("ref2_label", "singler", "popv", "second_reference", "ref_crossval", "deg_label", "cluster_deg"))
     has_fusion = "fuse_annotation" in low or "annotation_n_agree" in low or "annotation_fusion" in low
     has_predicted_doublet = "predicted_doublet" in low or "doublet_call" in low
@@ -61,6 +61,18 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
             _add(records, "使用了固定 pctMT=5/10 阈值，应改为看分布 + MAD/percentile", id="qc.hard_mt")
         if not has_predicted_doublet and "detect_doublets" not in low and "scrublet" not in low:
             _add(records, "QC 缺少双细胞检测（Scrublet / detect_doublets / doublet_call）", id="qc.doublet")
+        if "SystemExit(0)" in text and "SCAGENT_R_QC_OK" not in text and "maybe_run_r_qc" in text:
+            _add(
+                records,
+                "R QC 成功后不得 SystemExit 跳过 Python doublet/ambient 证据层",
+                id="qc.r_skip_doublet",
+            )
+        if "remove_ambient" in low and "soupx_python" in low and "allow_heuristic" not in low:
+            _add(
+                records,
+                "ambient 启发式回退须显式允许，不能静默改写 counts",
+                id="qc.ambient_heuristic",
+            )
         if "scrublet skipped" in low and "predicted_doublet" not in low:
             _add(records, "Scrublet 被跳过且未写入 predicted_doublet", id="qc.doublet_skip")
         n_samp = int((metadata or {}).get("n_samples") or 1)
@@ -116,6 +128,12 @@ def audit_code(code: str, metadata: dict | None = None, phase: str = "qc") -> di
         if force_pseudobulk_de(metadata) or metadata.get("force_pseudobulk_de"):
             if not has_pseudobulk_impl or not (has_pseudobulk_note or "fdr" in low):
                 _add(records, "组间比较必须 sample-level pseudobulk + FDR，不能只用 cell-level Wilcoxon", id="down.pseudobulk")
+            if "confirmatory=True" not in text and "confirmatory = True" not in text:
+                _add(
+                    records,
+                    "强制组间 DE 须 confirmatory=True（拒绝无 edgeR/DESeq2 时静默 t-test 冒充确认结果）",
+                    id="down.pb_confirmatory",
+                )
         elif "rank_genes_groups" in low or "rank_genes(" in low:
             if not has_pseudobulk_note:
                 _add(records, "差异表达未声明探索-only / 组间须 pseudobulk+FDR", id="down.deg_note")
@@ -226,6 +244,14 @@ def audit_execution(
         max_rate = float((load_config().get("qc") or {}).get("doublet_rate_max") or 0.10)
         if rate is not None and float(rate) > max_rate:
             _add(records, f"双细胞比例 {float(rate):.1%} 超过 {max_rate:.0%}", id="exec.doublet_rate", source="execution")
+        amb = str(metrics.get("ambient_backend") or metrics.get("ambient") or "")
+        if metrics.get("ambient_applied") is True and "heuristic" in amb:
+            _add(
+                records,
+                f"ambient 使用了启发式回退 ({amb})；非 SoupX/DecontX，报告须声明",
+                id="exec.ambient_heuristic",
+                source="execution",
+            )
 
     if phase == "downstream":
         h5ad = (artifacts.get("h5ads") or {}).get("processed")
@@ -407,7 +433,13 @@ def publication_review(state: dict) -> dict:
         elif "deseq2" in eng:
             items.append(_item("deg", "pass", f"sample-level pseudobulk + DESeq2 + FDR ({eng}){cv_bit}"))
         elif "ttest" in eng:
-            items.append(_item("deg", "pass", f"sample-level pseudobulk + t-test+BH ({eng}){cv_bit}"))
+            items.append(
+                _item(
+                    "deg",
+                    "fail",
+                    f"强制组间 DE 落到 t-test+BH ({eng})，不能作为确认性结果；需 edgeR/DESeq2",
+                )
+            )
         elif "pseudobulk_de" in text or "get.aggregate" in text:
             items.append(_item("deg", "pass", f"sample-level pseudobulk + FDR（优先 edgeR/DESeq2 via rpy2）{cv_bit}"))
         else:

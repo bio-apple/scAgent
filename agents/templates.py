@@ -79,8 +79,12 @@ def _ambient_block(method: str | None) -> str:
     return dedent(
         f"""\
         from scagent.preprocess import remove_ambient
-        adata = remove_ambient(adata, method={method!r})
-        print("ambient=" + str((adata.uns.get("ambient") or {{}}).get("method", {method!r})))
+        # Heuristic fallback does not mutate counts unless method ends with _heuristic.
+        adata = remove_ambient(adata, method={method!r}, allow_heuristic=False)
+        _amb = adata.uns.get("ambient") or {{}}
+        print("ambient=" + str(_amb.get("method", {method!r})) + " applied=" + str(_amb.get("applied")))
+        if _amb.get("applied") is False:
+            print("SCAGENT_WARN: ambient requested but SoupX/DecontX unavailable; counts unchanged")
         """
     )
 
@@ -139,12 +143,14 @@ def _router_qc_bootstrap(data_path: str, meta: dict, qc: dict) -> str:
         f"""\
         import os
         from pathlib import Path
+        _R_QC = False
         if os.environ.get("SCAGENT_FORCE_PYTHON") != "1":
             from scagent.phase_runner import maybe_run_r_qc
             _router_meta = {json.dumps(meta, ensure_ascii=False)}
             _router_qc = {json.dumps(slim_qc, ensure_ascii=False)}
             if maybe_run_r_qc(data_path={data_path!r}, workspace=Path("."), meta=_router_meta, qc=_router_qc):
-                raise SystemExit(0)
+                _R_QC = True
+                print("SCAGENT_R_QC_OK; continuing Python doublet/ambient + QC figures")
         """
     )
 
@@ -297,6 +303,7 @@ def _pseudobulk_block(
         if force_pseudobulk
         else ""
     )
+    conf_arg = "True" if force_pseudobulk else "False"
     return dedent(
         f"""\
         {force_note}from scagent.analysis import pseudobulk_de
@@ -318,9 +325,12 @@ def _pseudobulk_block(
             groupby="cell_type" if "cell_type" in adata.obs else "leiden",
             engine={eng!r},
             cross_validate={cross_validate!r},
+            confirmatory={conf_arg},
         )
         pb = adata.uns.get("pseudobulk_de") or {{}}
-        print("pseudobulk_de engine=" + str(pb.get("engine")) + " ran=" + str(pb.get("ran")))
+        print("pseudobulk_de engine=" + str(pb.get("engine")) + " ran=" + str(pb.get("ran")) + " confirmatory=" + str(pb.get("confirmatory")))
+        if pb.get("exploratory_only"):
+            print("SCAGENT_WARN: pseudobulk engine is exploratory-only (not edgeR/DESeq2)")
         """
     )
 
@@ -512,6 +522,19 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
     p = analysis_params()
     perf = performance_params()
     n_cells = meta.get("n_cells")
+
+    def _ind_body(text: str, n: int = 4) -> str:
+        """Indent lines after the first so a token under `else:` stays valid."""
+        lines = text.splitlines()
+        if not lines:
+            return ""
+        pad = " " * n
+        out = [lines[0]]
+        out.extend(pad + ln if ln.strip() else ln for ln in lines[1:])
+        return "\n".join(out)
+
+    load_py = _ind_body(_load_block(path, n_cells=None if n_cells is None else int(n_cells)), 4)
+    locked_py = _ind_body(_locked_qc(qc, qc_vars).strip("\n"), 4)
     tpl = dedent(
         """\
         # scAgent phase 1: QC + preprocess. Tissue=__TISSUE__, species=__SPECIES__.
@@ -539,7 +562,11 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
 
         __ROUTER_QC__
 
-        __LOAD_BLOCK__
+        if _R_QC:
+            adata = sc.read_h5ad("adata_qc.h5ad")
+            print("SCAGENT_LOAD: R QC h5ad reloaded for Python doublet/ambient layer")
+        else:
+            __LOAD_INDENTED__
         adata.var_names_make_unique()
         if not getattr(adata, "isbacked", False) and adata.X is not None and not sp.issparse(adata.X):
             adata.X = sp.csr_matrix(adata.X)
@@ -550,7 +577,30 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         adata.var["ribo"] = adata.var_names.str.upper().str.startswith(("RPS", "RPL"))
         __HB_LINE__
 
-        __LOCKED_QC__
+        if _R_QC:
+            _qm = {}
+            if Path("qc_metrics.json").is_file():
+                _qm = json.loads(Path("qc_metrics.json").read_text(encoding="utf-8"))
+            n_before = int(_qm.get("n_before") or adata.n_obs)
+            n_after = int(_qm.get("n_after") or adata.n_obs)
+            pct_removed = float(_qm.get("pct_removed") or (100.0 * (1 - n_after / max(n_before, 1))))
+            if "pct_counts_mt" not in adata.obs.columns:
+                sc.pp.calculate_qc_metrics(
+                    adata, qc_vars=__QC_VARS__, percent_top=None, log1p=True, inplace=True
+                )
+            sc.pl.violin(
+                adata,
+                ["n_genes_by_counts", "total_counts", "pct_counts_mt"],
+                jitter=0.4,
+                multi_panel=True,
+                save="_qc_violin.png",
+                show=False,
+            )
+            sc.pl.scatter(adata, x="total_counts", y="n_genes_by_counts", save="_qc_scatter_counts.png", show=False)
+            sc.pl.scatter(adata, x="total_counts", y="pct_counts_mt", save="_qc_scatter_mt.png", show=False)
+            print("SCAGENT_SKIP_REFILTER; R MAD already applied; Python adds doublet/ambient")
+        else:
+            __LOCKED_INDENTED__
 
         __AMBIENT__
 
@@ -586,6 +636,9 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
             "qc_method": __QC_METHOD__,
             "imputation": __IMPUTE_METHOD__,
             "ambient": __AMBIENT_METHOD__,
+            "ambient_applied": bool((adata.uns.get("ambient") or {}).get("applied")),
+            "ambient_backend": (adata.uns.get("ambient") or {}).get("method"),
+            "r_qc_used": bool(_R_QC),
             "doublet_rate": doublet_rate,
             "doublet_rate_high_conf": doublet_rate_high_conf,
             "doublet_rate_low_conf": doublet_rate_low_conf,
@@ -613,11 +666,12 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
         tpl.replace("__TISSUE__", str(tissue))
         .replace("__SPECIES__", str(species))
         .replace("__ROUTER_QC__", _router_qc_bootstrap(str(path), meta, qc))
-        .replace("__LOAD_BLOCK__", _load_block(path, n_cells=None if n_cells is None else int(n_cells)))
+        .replace("__LOAD_INDENTED__", load_py)
         .replace("__SAMPLE_KEY__", sample_key)
         .replace("__MT_PREFIX__", repr(mt_prefix))
         .replace("__HB_LINE__", hb_line)
-        .replace("__LOCKED_QC__", _locked_qc(qc, qc_vars))
+        .replace("__QC_VARS__", qc_vars)
+        .replace("__LOCKED_INDENTED__", locked_py)
         .replace("__AMBIENT__", _ambient_block(ambient_method))
         .replace("__SCRUBLET__", _doublet_block(remove_doublets, doublet_methods, str(tissue), doublet_filter))
         .replace("__CELL_CYCLE__", _cell_cycle_block(str(species), regress_cc, str(tissue)))

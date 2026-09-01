@@ -11,7 +11,7 @@ Remove empty droplets / dying cells / doublets, normalize, select HVGs, and prep
 ## Must include
 1. QC metrics: n_genes, total counts, mito % (jointly; **per-sample**)
 2. Filter with **MAD / percentile** (not fixed mito%<5 by default)
-3. Doublet detection (Scrublet / scDblFinder / DoubletFinder); optional ambient (SoupX / CellBender)
+3. Doublet detection (Scrublet / scDblFinder / DoubletFinder); ambient only via real SoupX/DecontX (heuristic must be explicit)
 4. Normalize → log1p → HVG → Scale (or SCTransform / Pearson residuals)
 
 ## Decision heuristics

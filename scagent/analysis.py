@@ -351,8 +351,13 @@ def pseudobulk_de(
     min_replicates: int | None = None,
     engine: str | None = None,
     cross_validate: Any = None,
+    confirmatory: bool = False,
 ):
-    """Sample × cell-type sum of raw counts, then edgeR/DESeq2 (rpy2) or t-test + BH-FDR."""
+    """Sample × cell-type sum of raw counts, then edgeR/DESeq2 (rpy2) or t-test + BH-FDR.
+
+    When ``confirmatory=True`` (condition + replicates≥2), edgeR/DESeq2 is required —
+    t-test fallback is refused rather than reported as confirmatory DEG.
+    """
     import json
 
     import pandas as pd
@@ -370,6 +375,10 @@ def pseudobulk_de(
     if engine == "mast":
         log.warning("MAST is cell-level; condition DE still uses pseudobulk (edgeR/DESeq2/t-test)")
         engine = "auto"
+    # Explicit t-test request is exploratory even if confirmatory flag was passed.
+    if engine in {"ttest", "t-test"}:
+        confirmatory = False
+        engine = "ttest"
     do_cv = resolve_cross_validate(cfg.get("cross_validate"), explicit=_cv_explicit(cross_validate))
 
     if sample_key not in adata.obs or condition_key not in adata.obs:
@@ -396,9 +405,23 @@ def pseudobulk_de(
         if r_out:
             results = r_out
             used = used_r or "edger_rpy2"
-        elif engine in {"edger", "deseq2"}:
-            log.warning("requested DEG engine=%s unavailable; falling back to t-test+BH", engine)
+        elif engine in {"edger", "deseq2"} and not confirmatory:
+            log.warning("requested DEG engine=%s unavailable; falling back to exploratory t-test+BH", engine)
     if not results:
+        if confirmatory:
+            adata.uns["pseudobulk_de"] = {
+                "ran": False,
+                "engine": None,
+                "requested_engine": engine,
+                "reason": "negbinom_unavailable",
+                "confirmatory": True,
+                "exploratory_only": False,
+                "note": "confirmatory condition DE requires edgeR/DESeq2; t-test fallback refused",
+            }
+            raise RuntimeError(
+                "SCAGENT_FAIL: confirmatory pseudobulk_de requires edgeR/DESeq2; "
+                "t-test fallback refused (install edgeR/DESeq2 or set engine='ttest' for exploratory-only)"
+            )
         results = _pseudobulk_ttest(pb, sample_key, condition_key, groupby, min_replicates=min_replicates)
         used = "ttest_bh"
     df = pd.DataFrame(results)
@@ -412,7 +435,7 @@ def pseudobulk_de(
             alt_rows, alt_used = _pseudobulk_r_backend(
                 pb, sample_key, condition_key, groupby, engine=alt, min_replicates=min_replicates
             )
-        if not alt_rows and "ttest" not in used:
+        if not alt_rows and "ttest" not in used and not confirmatory:
             alt_rows = _pseudobulk_ttest(pb, sample_key, condition_key, groupby, min_replicates=min_replicates)
             alt_used = "ttest_bh"
         if alt_rows and alt_used:
@@ -421,6 +444,7 @@ def pseudobulk_de(
             df2.to_csv("pseudobulk_de_alt.csv", index=False)
             overlap = gene_overlap(sig_genes(results), sig_genes(alt_rows))
             Path("pseudobulk_de_overlap.json").write_text(json.dumps(overlap, indent=2), encoding="utf-8")
+    exploratory = used == "ttest_bh" and not confirmatory
     adata.uns["pseudobulk_de"] = {
         "ran": bool(len(df)),
         "engine": used,
@@ -431,7 +455,13 @@ def pseudobulk_de(
         "cross_validate": bool(overlap),
         "n_overlap": None if not overlap else overlap.get("n_overlap"),
         "jaccard": None if not overlap else overlap.get("jaccard"),
-        "note": "sample-level pseudobulk + FDR; not cell-level Wilcoxon/MAST",
+        "confirmatory": bool(confirmatory),
+        "exploratory_only": bool(exploratory),
+        "note": (
+            "EXPLORATORY sample-level t-test+BH; not confirmatory edgeR/DESeq2"
+            if exploratory
+            else "sample-level pseudobulk + FDR; not cell-level Wilcoxon/MAST"
+        ),
     }
     if len(df):
         df.to_csv("pseudobulk_de.csv", index=False)
@@ -442,7 +472,7 @@ def pseudobulk_de(
             volcano_from_de_csv(Path("pseudobulk_de.csv"))
         except Exception as exc:
             log.info("volcano plot skipped: %s", exc)
-    log.info("pseudobulk_de engine=%s n=%s cv=%s", used, len(df), bool(overlap))
+    log.info("pseudobulk_de engine=%s n=%s cv=%s confirmatory=%s", used, len(df), bool(overlap), confirmatory)
     return adata
 
 
