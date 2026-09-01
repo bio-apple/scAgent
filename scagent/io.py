@@ -47,6 +47,41 @@ def peek_h5ad_shape(path: str | Path) -> tuple[int | None, int | None]:
     return None, None
 
 
+def sanitize_sparse_x(adata):
+    """Drop out-of-bounds sparse indices (some h5ad exports have col idx == n_vars)."""
+    if getattr(adata, "isbacked", False):
+        return adata
+    try:
+        from scipy import sparse
+    except ImportError:
+        return adata
+    X = adata.X
+    if X is None or not sparse.issparse(X):
+        return adata
+    n_vars = int(getattr(adata, "n_vars", 0) or 0)
+    if n_vars <= 0:
+        return adata
+    X = X.tocsr(copy=True)
+    bad = X.indices >= n_vars
+    if not bad.any():
+        adata.X = X
+        return adata
+    n_bad = int(bad.sum())
+    log.warning(
+        "sparse X has %s out-of-bounds column indices (max=%s, n_vars=%s); dropping entries",
+        n_bad,
+        int(X.indices.max()),
+        n_vars,
+    )
+    X.data = X.data.copy()
+    X.indices = X.indices.copy()
+    X.data[bad] = 0
+    X.indices[bad] = 0
+    X.eliminate_zeros()
+    adata.X = X
+    return adata
+
+
 def ensure_csr(adata):
     """Keep counts sparse. No-op for backed objects."""
     if getattr(adata, "isbacked", False):
@@ -61,10 +96,10 @@ def ensure_csr(adata):
     if sparse.issparse(X):
         if not sparse.isspmatrix_csr(X):
             adata.X = X.tocsr()
-        return adata
-    adata.X = sparse.csr_matrix(X)
-    log.info("converted dense X to CSR nnz=%s", adata.X.nnz)
-    return adata
+    else:
+        adata.X = sparse.csr_matrix(X)
+        log.info("converted dense X to CSR nnz=%s", adata.X.nnz)
+    return sanitize_sparse_x(adata)
 
 
 def parse_data_spec(raw: str | Path | Iterable[str | Path] | None) -> list[Path]:
@@ -368,6 +403,16 @@ def concat_samples(paths: list[Path], *, sample_key: str = "sample", **kwargs: A
     return ensure_csr(out)
 
 
+def _drop_reserved_obs_columns(adata):
+    """Some exports store index as obs['_index'], which AnnData cannot write back."""
+    cols = getattr(getattr(adata, "obs", None), "columns", None)
+    if cols is None or "_index" not in cols:
+        return adata
+    log.warning("obs column '_index' is reserved; renaming to 'orig_index'")
+    adata.obs.rename(columns={"_index": "orig_index"}, inplace=True)
+    return adata
+
+
 def read_h5ad(path: str | Path, *, backed: str | None | bool = None, use_dask: bool | None = None):
     """Load h5ad. backed=True/'r' or auto when n_obs >= performance.backed_threshold_cells.
     use_dask=True (or performance.dask.enabled + threshold) tags experimental Dask/out-of-core path."""
@@ -393,6 +438,7 @@ def read_h5ad(path: str | Path, *, backed: str | None | bool = None, use_dask: b
         mode = "r"
     log.info("read h5ad %s backed=%s n_obs=%s dask=%s", path, mode, n_obs, want_dask)
     adata = ad.read_h5ad(path, backed=mode) if mode else ad.read_h5ad(path)
+    _drop_reserved_obs_columns(adata)
     if want_dask:
         configure_scanpy_dask(adata)
     if mode is None:

@@ -44,17 +44,19 @@ def _load_block(path: str, *, n_cells: int | None = None) -> str:
         use_dask = bool(dp.get("enabled")) and n_cells is not None and int(n_cells) >= dask_thr
         if use_dask:
             return (
-                f"adata = sc.read_h5ad({path_r}, backed='r')\n"
+                f"from scagent.io import read_h5ad\n"
+                f"adata = read_h5ad({path_r}, backed='r')\n"
                 "from scagent.performance import configure_scanpy_dask\n"
                 "configure_scanpy_dask(adata)\n"
                 'print("SCAGENT_WARN: Dask experimental path (backed + scagent_dask); materialize subsets before scale/PCA")'
             )
         if n_cells is not None and int(n_cells) >= thr:
             return (
-                f"adata = sc.read_h5ad({path_r}, backed='r')\n"
+                f"from scagent.io import read_h5ad\n"
+                f"adata = read_h5ad({path_r}, backed='r')\n"
                 'print("SCAGENT_WARN: AnnData backed=r for large h5ad; subset is materialized after QC")'
             )
-        return f"adata = sc.read_h5ad({path_r})"
+        return f"from scagent.io import read_h5ad\nadata = read_h5ad({path_r})"
     return (
         "from scagent.io import read_single_cell\n"
         f"adata = read_single_cell({path_r})"
@@ -1037,13 +1039,20 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
                 row["conflict"] = bool(adata.obs.loc[sub, "annotation_conflict"].any()) if "annotation_conflict" in adata.obs else False
         Path("annotation_evidence.json").write_text(json.dumps(evidence_rows, indent=2), encoding="utf-8")
         __PSEUDOBULK__
-        color_cols = ["cell_type", "marker_label", "deg_label", "cell_type_l1", "annotation_status"]
-        if "scagent_annotation" in adata.obs:
-            color_cols.append("scagent_annotation")
-        if "celltypist_label" in adata.obs:
-            color_cols.append("celltypist_label")
-        if "ref2_label" in adata.obs:
-            color_cols.append("ref2_label")
+        _color_candidates = [
+            "leiden",
+            "cell_type",
+            "marker_label",
+            "deg_label",
+            "cell_type_l1",
+            "annotation_status",
+            "scagent_annotation",
+            "celltypist_label",
+            "ref2_label",
+        ]
+        color_cols = [c for c in _color_candidates if c in adata.obs.columns]
+        if not color_cols:
+            color_cols = ["leiden"]
         sc.pl.umap(adata, color=color_cols, save="_annotation.png", show=False)
 
         __TRAJECTORY__

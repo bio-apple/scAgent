@@ -147,12 +147,35 @@ def test_io_loom_suffix_is_dispatched(tmp_path):
     assert meta["exists"] is True
 
 
+def test_sanitize_sparse_oob_indices():
+    pytest.importorskip("anndata")
+    pytest.importorskip("scipy")
+    import anndata as ad
+    import pandas as pd
+    from scipy import sparse
+
+    from scagent.io import ensure_csr, sanitize_sparse_x
+
+    indptr = __import__("numpy").array([0, 1, 2])
+    indices = __import__("numpy").array([0, 2])
+    data = __import__("numpy").array([1.0, 2.0])
+    X = sparse.csr_matrix((data, indices, indptr), shape=(2, 2))
+    adata = ad.AnnData(X=X, var=pd.DataFrame(index=["g0", "g1"]))
+    sanitize_sparse_x(adata)
+    assert adata.X.shape == (2, 2)
+    assert len(adata.X.getnnz(axis=0)) == 2
+    assert int(adata.X[0, 0]) == 1
+    assert int(adata.X[1, 0]) == 0
+    ensure_csr(adata)
+    assert sparse.isspmatrix_csr(adata.X)
+
+
 def test_load_block_uses_io_for_new_formats():
     assert "read_single_cell" in _load_block("x.loom")
     assert "read_single_cell" in _load_block("outs/filtered_feature_bc_matrix")
     assert "read_single_cell" in _load_block("a.h5ad,b.h5ad")
     assert "read_single_cell" in _load_block("obj.rds")
-    assert "sc.read_h5ad" in _load_block("x.h5ad")
+    assert "read_h5ad" in _load_block("x.h5ad")
 
 
 def test_bbknn_integrator_template_and_route():
