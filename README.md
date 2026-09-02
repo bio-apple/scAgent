@@ -1,6 +1,6 @@
 # Single-Cell RNA-seq Analysis Agent
 
-LangGraph agent for single-cell bioinformatics: **tissue-aware QC, execution review, auditable scripts**. Focus: **scRNA-seq** with **10 scientific-task skills** (not PCA/UMAP primitives). [`knowledge/`](README.md#knowledge-base) fused RAG + structured KB. Agents retrieve **parsed paper passages** (MinerU) and cite them in the report.
+LangGraph agent for single-cell bioinformatics: **tissue-aware QC, execution review, auditable scripts**. Focus: **scRNA-seq** with **6 capability skills** (see [`SYSTEM.md`](SYSTEM.md) Hard Rules). [`knowledge/`](README.md#knowledge-base) fused RAG + structured KB. Agents retrieve **parsed paper passages** (MinerU) and cite them in the report.
 
 ## Quick start
 

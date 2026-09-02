@@ -485,6 +485,18 @@ def publication_review(state: dict) -> dict:
                 items.append(_item("figures", "fail", "缺图: " + ", ".join(missing_fig)))
             else:
                 items.append(_item("figures", "pass", f"{len(figs)} 张图"))
+    if figs and executed:
+        import re
+
+        dpi_vals = [int(x) for x in re.findall(r"dpi\s*=\s*(\d+)", text)]
+        if dpi_vals and max(dpi_vals) < 300:
+            items.append(
+                _item(
+                    "figures",
+                    "missing",
+                    f"Hard Rule: 图应 ≥300 dpi（代码中 max dpi={max(dpi_vals)}）",
+                )
+            )
 
     if rd.get("has_dual") and rd.get("has_fusion") and (
         rd.get("has_celltypist") or "celltypist" in text or rd.get("has_ref2") or "deg_label" in text

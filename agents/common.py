@@ -20,6 +20,23 @@ def read_prompt(name: str) -> str:
     return (_prompts() / f"{name}.md").read_text(encoding="utf-8")
 
 
+def system_rules() -> str:
+    """Non-negotiable Hard Rules from SYSTEM.md (repo root)."""
+    from scagent.config import REPO_ROOT
+
+    path = REPO_ROOT / "SYSTEM.md"
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def with_system_rules(system_prompt: str) -> str:
+    rules = system_rules()
+    if not rules:
+        return system_prompt
+    return f"{rules}\n\n---\n\n{system_prompt}"
+
+
 log = get_logger("llm")
 _last_call = 0.0
 _tokens = {"input": 0, "output": 0, "total": 0}
@@ -146,7 +163,7 @@ def invoke_json(system_prompt: str, user_text: str, cfg: dict | None = None) -> 
         bound = llm.bind(response_format={"type": "json_object"})
     except Exception:
         bound = llm
-    ai = invoke_llm(bound, [SystemMessage(content=system_prompt), HumanMessage(content=user_text)], cfg)
+    ai = invoke_llm(bound, [SystemMessage(content=with_system_rules(system_prompt)), HumanMessage(content=user_text)], cfg)
     content = ai.content if isinstance(ai.content, str) else str(ai.content)
     try:
         data = json.loads(content)
@@ -174,7 +191,7 @@ def run_specialist(system_prompt: str, user_text: str, cfg: dict | None = None) 
     cfg = cfg or load_config()
     max_rounds = int(cfg["model"].get("max_tool_rounds") or 4)
     model = llm.bind_tools(TOOLS)
-    messages: list = [SystemMessage(content=system_prompt), HumanMessage(content=user_text)]
+    messages: list = [SystemMessage(content=with_system_rules(system_prompt)), HumanMessage(content=user_text)]
     for _ in range(max_rounds):
         ai = invoke_llm(model, messages, cfg)
         messages.append(ai)
