@@ -1,57 +1,61 @@
 {
-  "product_focus": "scRNA-seq-tasks",
-  "active_skills": 10,
-  "task_skills": [
+  "product_focus": "scRNA-capability-skills",
+  "active_skills": 6,
+  "capability_skills": [
+    "seurat-workflow",
+    "cell-annotation",
+    "differential-expression",
+    "cell-communication",
+    "trajectory",
+    "spatial-analysis"
+  ],
+  "deprecated_task_skills": [
     "dataset_loader",
     "qc_preprocessing",
     "integration_batch",
     "clustering_embedding",
-    "cell_annotation",
     "deg_pathway",
-    "trajectory",
-    "cell_communication",
     "visualization",
     "report_generation"
   ],
-  "note": "Ten scientific-task skills under skills/*/SKILL.md. scRNA recipes from skills/_archive were fused into these task skills; ATAC/spatial/multiome/perturb/splicing remain archived only.",
+  "note": "Six capability skills under skills/*/SKILL.md. Legacy task skills remain as deprecated aliases (see LEGACY_SKILL_ALIASES in skills_loader.py). Spatial is placeholder until Squidpy/Giotto wired.",
   "archived_legacy_granular": true,
+  "legacy_mapping": {
+    "dataset_loader": "seurat-workflow",
+    "qc_preprocessing": "seurat-workflow",
+    "integration_batch": "seurat-workflow",
+    "clustering_embedding": "seurat-workflow",
+    "visualization": "seurat-workflow",
+    "report_generation": "seurat-workflow",
+    "cell_annotation": "cell-annotation",
+    "deg_pathway": "differential-expression",
+    "cell_communication": "cell-communication"
+  },
   "fusion": {
-    "dataset_loader": [
-      "nfcore-scrnaseq-wrapper"
-    ],
-    "qc_preprocessing": [
+    "seurat-workflow": [
+      "dataset_loader",
+      "qc_preprocessing",
+      "integration_batch",
+      "clustering_embedding",
+      "visualization",
+      "report_generation",
       "single-cell-preprocessing-with-omicverse",
       "scrna-orchestrator"
     ],
-    "integration_batch": [
-      "scrna-embedding",
-      "single-cell-clustering-and-batch-correction-with-omicverse"
-    ],
-    "clustering_embedding": [
-      "scrna-orchestrator",
-      "single-cell-clustering-and-batch-correction-with-omicverse"
-    ],
-    "cell_annotation": [
+    "cell-annotation": [
       "single-cell-annotation-skills-with-omicverse",
       "universal-single-cell-annotator"
     ],
-    "deg_pathway": [
+    "differential-expression": [
+      "deg_pathway",
       "scrna-orchestrator"
     ],
     "trajectory": [
       "Single-Cell Trajectory Inference"
     ],
-    "cell_communication": [
+    "cell-communication": [
       "single-cell-cellphonedb-communication-mapping",
       "bio-single-cell-metabolite-communication"
-    ],
-    "visualization": [
-      "scrna-orchestrator"
-    ],
-    "report_generation": [
-      "scrna-orchestrator",
-      "scrna-embedding",
-      "nfcore-scrnaseq-wrapper"
     ]
   }
 }

@@ -183,6 +183,8 @@ def _python_blocks(state: dict, lang: str | None = None) -> list[dict[str, Any]]
                 "script": {
                     "qc": "workspace/qc_preprocess.py",
                     "downstream": "workspace/cluster_annotate.py",
+                    "cluster": "workspace/cluster_only.py",
+                    "annotate": "workspace/annotate_deg.py",
                     "interpret": "workspace/interpret_pathways.py",
                 }.get(phase),
             }

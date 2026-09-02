@@ -1,6 +1,8 @@
 ---
 name: report_generation
-description: "Assemble Markdown/HTML report: summary, methods, QC numbers, limitations, session info."
+description: "DEPRECATED → use seurat-workflow. Markdown/HTML report assembly."
+deprecated: true
+replaced_by: seurat-workflow
 ---
 
 # Scientific task: Report generation

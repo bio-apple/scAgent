@@ -28,7 +28,7 @@ def list_analysis_skills() -> str:
 
 @tool
 def load_skill(name: str) -> str:
-    """Load a scientific-task skill by name, e.g. qc_preprocessing, cell_annotation."""
+    """Load a capability skill by name, e.g. seurat-workflow, cell-annotation (legacy names alias)."""
     return load_skill_text(name, include_references=False)
 
 

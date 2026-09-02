@@ -1,6 +1,7 @@
 ---
-name: cell_annotation
-description: "Assign cell types via reference mapping + markers with dual validation (not single-gene labels)."
+name: cell-annotation
+description: "Assign cell types via reference mapping + markers with dual validation. Requires --tissue for catalog/CellTypist."
+capability: true
 ---
 
 # Scientific task: Cell type annotation

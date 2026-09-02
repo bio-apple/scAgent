@@ -1,6 +1,7 @@
 ---
 name: trajectory
-description: "Pseudotime / lineage inference (PAGA, DPT, Palantir, Monocle3, scVelo when applicable)."
+description: "Pseudotime / fate: PAGA, DPT, Palantir, scVelo (auto-gated). Monocle3 via R when requested."
+capability: true
 ---
 
 # Scientific task: Trajectory / fate

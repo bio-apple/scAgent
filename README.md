@@ -112,24 +112,22 @@ Planner / QC / Annotation / Interpretation call phase-aware `search_paper_knowle
 
 ## Skills layout
 
-**Principle:** one skill = one scientific task (not NormalizeData / PCA / Leiden).
+**Principle:** one skill = one analysis **capability** (not PCA/UMAP/Leiden primitives).
 
-| Skill | Task |
-|-------|------|
-| `dataset_loader` | 10x / H5 / H5AD / RDS → analysis object |
-| `qc_preprocessing` | QC + normalize + HVG + scale |
-| `integration_batch` | Harmony / scVI / CCA (optional) |
-| `clustering_embedding` | PCA → neighbors → Leiden → UMAP |
-| `cell_annotation` | CellTypist / markers / dual validation |
-| `deg_pathway` | Markers or pseudobulk DE + GO/KEGG/GSEA |
-| `trajectory` | Pseudotime / Monocle3 / velocity |
-| `cell_communication` | CellChat / CellPhoneDB |
-| `visualization` | Paper-style figures |
-| `report_generation` | Markdown / HTML / methods |
+| Capability | Scope |
+|------------|--------|
+| `seurat-workflow` | Load → QC → normalize → HVG → integrate → cluster → UMAP |
+| `cell-annotation` | CellTypist / Azimuth / marker dual-validation |
+| `differential-expression` | Exploratory cluster markers + confirmatory pseudobulk DE |
+| `cell-communication` | CellChat (R-first) |
+| `trajectory` | PAGA / DPT / Palantir / scVelo / Monocle3 |
+| `spatial-analysis` | ST placeholder (Squidpy/Giotto future) |
 
-Granular / spatial / ATAC cookbooks live under `skills/_archive/` (not loaded). Step decision SOPs remain in `knowledge/best_practices/`.
+Legacy task skills (`qc_preprocessing`, `clustering_embedding`, …) remain as **deprecated aliases** → see `scagent/skills_loader.py`.
 
-`python -m scagent skills` lists the 10 active tasks.
+Granular / ATAC cookbooks live under `skills/_archive/`. SOPs: `knowledge/best_practices/`.
+
+`python -m scagent skills` lists the 6 active capabilities.
 
 ## Troubleshooting
 

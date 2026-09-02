@@ -1,6 +1,8 @@
 ---
 name: integration_batch
-description: "Multi-sample batch integration (Harmony default; scVI/CCA when warranted). Skip if sample≡condition."
+description: "DEPRECATED → use seurat-workflow. Batch integration Harmony/scVI."
+deprecated: true
+replaced_by: seurat-workflow
 ---
 
 # Scientific task: Batch integration

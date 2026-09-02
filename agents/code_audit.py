@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from agents.bio_coder import generate_code
-from agents.templates import interpret_pathways_script
+from agents.templates import annotate_deg_script, cluster_only_script, interpret_pathways_script
 from sandbox.executor import write_and_maybe_run
 from scagent.logutil import get_logger
 
@@ -16,6 +16,18 @@ PHASE_IO = {
     "downstream": ("cluster_annotate.py", "code_downstream", "execution_downstream"),
     "interpret": ("interpret_pathways.py", "code_interpret", "execution_interpret"),
 }
+
+DOWNSTREAM_SPLIT = (
+    ("cluster_only.py", "code_cluster", "execution_cluster"),
+    ("annotate_deg.py", "code_annotate", "execution_annotate"),
+)
+
+
+def _downstream_plan(state: dict) -> dict:
+    plan = dict(state.get("plan") or state.get("cluster_deg_plan") or {})
+    if state.get("resolution") is not None:
+        plan["resolution"] = state["resolution"]
+    return plan
 
 
 def _code_fp(code: str | None) -> str:
@@ -42,6 +54,16 @@ def _script_for(state: dict, phase: str) -> str:
         )
     if phase == "qc":
         return generate_code(state, phase="qc")
+    if phase == "cluster":
+        meta = state.get("metadata") or {}
+        qc = state.get("qc_strategy") or {}
+        plan = _downstream_plan(state)
+        return cluster_only_script(meta, qc, plan)
+    if phase == "annotate":
+        meta = state.get("metadata") or {}
+        qc = state.get("qc_strategy") or {}
+        plan = _downstream_plan(state)
+        return annotate_deg_script(meta, qc, plan)
     ann = state.get("annotation_plan") or {}
     return generate_code(state, phase="downstream") or ann.get("code") or ""
 
@@ -56,6 +78,9 @@ def generate_and_execute(
 ) -> dict:
     """One agent turn: emit code, jail/schema, run, attach artifacts. Self-correct lives in generate_code + graph retry."""
     from agents.artifacts import collect_workspace, merge_artifacts
+
+    if phase == "downstream":
+        return _generate_downstream_split(state, workspace=workspace, execute=execute, timeout=timeout)
 
     filename, code_key, exec_key = PHASE_IO[phase]
     code = _script_for(state, phase)
@@ -91,3 +116,45 @@ def generate_and_execute(
         "phase": phase,
         "reused": False,
     }
+
+
+def _generate_downstream_split(state: dict, *, workspace, execute: bool, timeout: int) -> dict:
+    from agents.artifacts import collect_workspace, merge_artifacts
+    from agents.templates import cluster_annotate_script
+
+    meta = state.get("metadata") or {}
+    qc = state.get("qc_strategy") or {}
+    plan = _downstream_plan(state)
+    combined = cluster_annotate_script(meta, qc, plan, phase="full")
+    cluster_code = cluster_only_script(meta, qc, plan)
+    annotate_code = annotate_deg_script(meta, qc, plan)
+    updates: dict = {"phase": "downstream", "reused": False}
+    last_result = None
+    for filename, code_key, exec_key in DOWNSTREAM_SPLIT:
+        code = cluster_code if filename == "cluster_only.py" else annotate_code
+        updates[code_key] = code
+        reused = _reuse(state.get(exec_key), code, execute)
+        if reused is not None:
+            updates[exec_key] = reused
+            last_result = reused
+            continue
+        result = write_and_maybe_run(
+            code,
+            workspace=workspace,
+            execute=execute,
+            timeout=timeout,
+            filename=filename,
+            extra_manifest={"phase": filename.replace(".py", ""), "data_path": state.get("data_path"), "thread_id": state.get("thread_id")},
+        )
+        result = dict(result)
+        result["code_fp"] = _code_fp(code)
+        updates[exec_key] = result
+        last_result = result
+    updates["code_downstream"] = combined
+    updates["code"] = combined
+    (workspace / "cluster_annotate.py").write_text(combined, encoding="utf-8")
+    if last_result is not None:
+        updates["execution_downstream"] = last_result
+        updates["execution"] = last_result
+        updates["artifacts"] = merge_artifacts(state.get("artifacts"), collect_workspace(workspace, "downstream", last_result))
+    return updates

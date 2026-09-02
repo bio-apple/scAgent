@@ -1,6 +1,8 @@
 ---
 name: deg_pathway
-description: "Cluster markers or condition DEG (pseudobulk when replicates≥2) plus GO/KEGG/GSEA interpretation."
+description: "DEPRECATED → use differential-expression. Pseudobulk DE + pathways."
+deprecated: true
+replaced_by: differential-expression
 ---
 
 # Scientific task: Differential expression & pathways

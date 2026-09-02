@@ -63,6 +63,17 @@ def _refresh_reproducible(workspace: Path, filename: str, code: str) -> None:
             prefix + "\n\n# --- PHASE 2 ---\n\n" + code, encoding="utf-8"
         )
         return
+    if filename in {"cluster_only.py", "annotate_deg.py"}:
+        p1 = workspace / "qc_preprocess.py"
+        p2 = workspace / "cluster_only.py"
+        parts = []
+        if p1.exists():
+            parts.append(p1.read_text(encoding="utf-8"))
+        if p2.exists() and filename == "annotate_deg.py":
+            parts.append("\n\n# --- CLUSTER ---\n\n" + p2.read_text(encoding="utf-8"))
+        parts.append("\n\n# --- " + filename.replace(".py", "").upper() + " ---\n\n" + code)
+        (workspace / "reproducible_script.py").write_text("".join(parts), encoding="utf-8")
+        return
     (workspace / "reproducible_script.py").write_text(code, encoding="utf-8")
 
 
@@ -173,7 +184,7 @@ def write_and_maybe_run(
         log.error("%s", result["stderr"])
         return result
 
-    needs_scanpy = filename in {"qc_preprocess.py", "cluster_annotate.py"} or "import scanpy" in code
+    needs_scanpy = filename in {"qc_preprocess.py", "cluster_annotate.py", "cluster_only.py", "annotate_deg.py"} or "import scanpy" in code
     if needs_scanpy:
         missing = check_packages()
         result["missing_packages"] = missing

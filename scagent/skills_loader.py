@@ -1,10 +1,9 @@
-"""Discover and recommend scientific-task skills (one skill ≈ one analysis stage)."""
+"""Discover and recommend capability-based skills (6 analysis capabilities)."""
 
 from __future__ import annotations
 
 import json
 import re
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,43 +12,43 @@ from scagent.config import REPO_ROOT, load_config, resolve_path
 _FRONTMATTER = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 _MANIFEST_PATH = REPO_ROOT / "skills" / "awesome_single_cell_manifest.json"
 
-# Canonical scientific-task skills (order = default analysis DAG).
-TASK_SKILLS: tuple[str, ...] = (
-    "dataset_loader",
-    "qc_preprocessing",
-    "integration_batch",
-    "clustering_embedding",
-    "cell_annotation",
-    "deg_pathway",
+# Canonical capability skills (diagram order).
+CAPABILITY_SKILLS: tuple[str, ...] = (
+    "seurat-workflow",
+    "cell-annotation",
+    "differential-expression",
+    "cell-communication",
     "trajectory",
-    "cell_communication",
-    "visualization",
-    "report_generation",
+    "spatial-analysis",
 )
 
-# Always include for a standard scRNA run.
-_CORE_SKILLS = (
-    "dataset_loader",
-    "qc_preprocessing",
-    "clustering_embedding",
-    "cell_annotation",
-    "visualization",
-    "report_generation",
-)
+# Backward compatibility: legacy task skill names → capability.
+LEGACY_SKILL_ALIASES: dict[str, str] = {
+    "dataset_loader": "seurat-workflow",
+    "qc_preprocessing": "seurat-workflow",
+    "integration_batch": "seurat-workflow",
+    "clustering_embedding": "seurat-workflow",
+    "visualization": "seurat-workflow",
+    "report_generation": "seurat-workflow",
+    "cell_annotation": "cell-annotation",
+    "deg_pathway": "differential-expression",
+    "cell_communication": "cell-communication",
+}
+
+# Deprecated names kept for tests/docs.
+TASK_SKILLS: tuple[str, ...] = tuple(LEGACY_SKILL_ALIASES.keys())
+
+_CORE_CAPABILITIES = ("seurat-workflow", "cell-annotation")
 
 _DEFAULT_CATALOG_LIMIT = 20
 
 _CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("io", ("dataset_loader", "load", "10x", "h5ad")),
-    ("qc", ("qc_preprocessing", "preprocess", "doublet", "质控")),
-    ("integration", ("integration_batch", "harmony", "batch", "整合")),
-    ("clustering", ("clustering_embedding", "leiden", "umap", "pca", "聚类")),
-    ("annotation", ("cell_annotation", "celltypist", "marker", "注释")),
-    ("deg", ("deg_pathway", "differential", "gsea", "pathway", "差异")),
-    ("trajectory", ("trajectory", "pseudotime", "velocity", "轨迹")),
-    ("communication", ("cell_communication", "cellchat", "ligand", "通讯")),
-    ("viz", ("visualization", "plot", "figure")),
-    ("report", ("report_generation", "report", "methods")),
+    ("workflow", ("seurat-workflow", "qc", "cluster", "integrat", "load", "umap", "leiden")),
+    ("annotation", ("cell-annotation", "celltypist", "marker", "注释", "azimuth")),
+    ("deg", ("differential-expression", "pseudobulk", "deg", "差异", "pathway")),
+    ("trajectory", ("trajectory", "pseudotime", "velocity", "monocle", "轨迹")),
+    ("communication", ("cell-communication", "cellchat", "ligand", "通讯")),
+    ("spatial", ("spatial-analysis", "spatial", "visium", "squidpy", "空间")),
 )
 
 
@@ -60,6 +59,8 @@ class Skill:
     path: Path
     body: str
     references: tuple[Path, ...]
+    deprecated: bool = False
+    replaced_by: str | None = None
 
 
 def _strip_leading_noise(text: str) -> str:
@@ -90,12 +91,24 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return meta, m.group(2).strip()
 
 
+def _truthy(val: str | None) -> bool:
+    return str(val or "").lower() in {"true", "1", "yes"}
+
+
 def skills_dir(cfg: dict | None = None) -> Path:
     cfg = cfg or load_config()
     return resolve_path(cfg, "skills")
 
 
-def list_skills(root: Path | None = None) -> list[Skill]:
+def _resolve_alias(name: str) -> str:
+    key = name.strip().lower().replace("_", "-")
+    for legacy, cap in LEGACY_SKILL_ALIASES.items():
+        if key == legacy.lower().replace("_", "-") or key == legacy.lower():
+            return cap
+    return name.strip()
+
+
+def list_skills(root: Path | None = None, *, include_legacy: bool = False) -> list[Skill]:
     base = root or skills_dir()
     skills: list[Skill] = []
     if not base.exists():
@@ -105,7 +118,10 @@ def list_skills(root: Path | None = None) -> list[Skill]:
             continue
         text = skill_md.read_text(encoding="utf-8")
         meta, body = _parse_frontmatter(text)
-        name = meta.get("name") or skill_md.parent.name
+        deprecated = _truthy(meta.get("deprecated"))
+        if deprecated and not include_legacy:
+            continue
+        name = meta.get("name") or skill_md.parent.name.replace("_", "-")
         refs = tuple(sorted(skill_md.parent.joinpath("references").glob("*.md")))
         skills.append(
             Skill(
@@ -114,18 +130,22 @@ def list_skills(root: Path | None = None) -> list[Skill]:
                 path=skill_md,
                 body=body,
                 references=refs,
+                deprecated=deprecated,
+                replaced_by=meta.get("replaced_by"),
             )
         )
-    # Stable DAG order for known task skills.
-    rank = {n: i for i, n in enumerate(TASK_SKILLS)}
+    rank = {n: i for i, n in enumerate(CAPABILITY_SKILLS)}
     skills.sort(key=lambda s: (rank.get(s.name, 1000), s.name))
     return skills
 
 
 def get_skill(name: str, root: Path | None = None) -> Skill | None:
-    key = name.strip().lower()
-    for skill in list_skills(root):
-        if skill.name.lower() == key or skill.path.parent.name.lower() == key:
+    resolved = _resolve_alias(name)
+    key = resolved.lower()
+    for skill in list_skills(root, include_legacy=True):
+        if skill.name.lower() == key or skill.path.parent.name.lower().replace("_", "-") == key.replace("_", "-"):
+            if skill.deprecated and skill.replaced_by:
+                return get_skill(skill.replaced_by, root)
             return skill
     return None
 
@@ -146,7 +166,7 @@ def _truncate(text: str, limit: int = 140) -> str:
 
 
 def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
-    """Select scientific-task skills from route / design (not algorithm primitives)."""
+    """Select capability skills from route / design."""
     skills = list_skills()
     if not skills:
         return []
@@ -155,10 +175,11 @@ def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
 
     def add(*cands: str) -> None:
         for c in cands:
+            c = _resolve_alias(c)
             if c in names and c not in selected:
                 selected.append(c)
 
-    add(*_CORE_SKILLS)
+    add(*_CORE_CAPABILITIES)
     route = [str(x).lower() for x in (metadata.get("route") or [])]
     intents = [str(x).lower() for x in (metadata.get("intents") or [])]
     topic = " ".join(
@@ -172,19 +193,14 @@ def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
 
     n_samples = int(metadata.get("n_samples") or 1)
     need_batch = bool(metadata.get("need_batch_correction")) or n_samples > 1
-    # Sample≡condition collinearity: skip integration skill (over-correction risk).
     confounded = bool(metadata.get("batch_condition_confounded"))
-    want_integration = (
-        (need_batch or metadata.get("integrator") or "harmony" in topic or "integrat" in topic)
-        and not confounded
-    )
-    if want_integration:
-        add("integration_batch")
+    if (need_batch or metadata.get("integrator") or "harmony" in topic or "integrat" in topic) and not confounded:
+        add("seurat-workflow")  # integration is part of core workflow
 
-    if any(k in topic for k in ("deg", "differen", "marker", "gsea", "pathway", "pseudobulk", "差异", "通路")) or any(
-        x in route for x in ("deg", "gsea", "enrichment")
+    if any(k in topic for k in ("deg", "differen", "pseudobulk", "差异", "pathway", "gsea")) or any(
+        x in route for x in ("deg", "gsea", "enrichment", "pseudobulk")
     ):
-        add("deg_pathway")
+        add("differential-expression")
 
     if any(k in topic for k in ("traject", "pseudotime", "velocity", "monocle", "slingshot", "命运", "轨迹")) or any(
         x in route for x in ("trajectory", "paga", "dpt")
@@ -192,10 +208,11 @@ def recommend_skills(metadata: dict, language: str = "python") -> list[str]:
         add("trajectory")
 
     if any(k in topic for k in ("cellchat", "communication", "ligand", "nichenet", "通讯", "配体")):
-        add("cell_communication")
+        add("cell-communication")
 
-    # Always finish with viz + report when core ran.
-    add("visualization", "report_generation")
+    if any(k in topic for k in ("spatial", "visium", "xenium", "squidpy", "空间", "st ", " slide-seq")):
+        add("spatial-analysis")
+
     return selected
 
 
@@ -213,15 +230,15 @@ def skill_catalog_text(
     if query:
         md.setdefault("user_query", query)
         md.setdefault("task", query)
-    rec_list = recommend_skills(md) if (metadata or query) else list(TASK_SKILLS)
+    rec_list = recommend_skills(md) if (metadata or query) else list(CAPABILITY_SKILLS)
     recommended = set(rec_list)
     lines = [
-        f"bundled scientific-task skills: {len(skills)}",
-        "principle: one skill = one research task (not PCA/UMAP/Leiden primitives)",
+        f"capability skills: {len(skills)}",
+        "principle: one skill = one analysis capability (not PCA/UMAP/Leiden primitives)",
     ]
     if rec_list:
         lines.append("recommended for this task: " + ", ".join(rec_list))
-    lines.append("## tasks")
+    lines.append("## capabilities")
     shown = 0
     for skill in skills:
         if limit is not None and shown >= limit:
@@ -230,6 +247,12 @@ def skill_catalog_text(
         mark = "*" if skill.name in recommended else "-"
         lines.append(f"{mark} {skill.name}: {_truncate(skill.description or skill.name, 110)}")
         shown += 1
+    legacy = list_skills(include_legacy=True)
+    dep = [s for s in legacy if s.deprecated]
+    if dep:
+        lines.append("## deprecated (alias → capability)")
+        for s in dep[:8]:
+            lines.append(f"- {s.path.parent.name} → {s.replaced_by or '?'}")
     return "\n".join(lines)
 
 
@@ -255,37 +278,30 @@ def awesome_manifest() -> dict | None:
 
 
 PHASE_SKILLS = {
-    "qc": ["dataset_loader", "qc_preprocessing"],
-    "downstream": [
-        "integration_batch",
-        "clustering_embedding",
-        "cell_annotation",
-        "deg_pathway",
-        "visualization",
-    ],
+    "qc": ["seurat-workflow"],
+    "cluster": ["seurat-workflow"],
+    "downstream": ["seurat-workflow", "cell-annotation", "differential-expression"],
+    "annotate": ["cell-annotation", "differential-expression"],
 }
 
 _PHASE_HINTS = {
-    "qc": ("dataset_loader", "qc_preprocessing", "qc", "preprocess", "load"),
+    "qc": ("seurat-workflow", "seurat", "qc", "preprocess", "load", "workflow"),
+    "cluster": ("seurat-workflow", "cluster", "leiden", "umap", "integrat"),
     "downstream": (
-        "integration_batch",
-        "clustering_embedding",
-        "cell_annotation",
-        "deg_pathway",
+        "seurat-workflow",
+        "cell-annotation",
+        "differential-expression",
         "trajectory",
-        "cell_communication",
-        "visualization",
-        "report_generation",
+        "cell-communication",
+        "spatial-analysis",
         "cluster",
         "annotat",
         "integrat",
         "deg",
-        "pathway",
         "traject",
         "communicat",
-        "visual",
-        "report",
     ),
+    "annotate": ("cell-annotation", "differential-expression", "annotat", "marker", "deg"),
 }
 
 
@@ -296,18 +312,26 @@ def _hint_match(name: str, hints: tuple[str, ...]) -> bool:
 
 def skills_for_phase(phase: str, plan_skills: list[str] | None = None, *, max_extra: int = 6) -> list[str]:
     available = {s.name for s in list_skills()}
-    wanted = [n for n in (PHASE_SKILLS.get(phase) or []) if n in available]
+    wanted = [_resolve_alias(n) for n in (PHASE_SKILLS.get(phase) or [])]
+    wanted = [n for n in wanted if n in available]
     hints = _PHASE_HINTS.get(phase) or ()
     extra: list[str] = []
     for name in plan_skills or []:
-        if name in wanted or name in extra:
+        resolved = _resolve_alias(name)
+        if resolved in wanted or resolved in extra:
             continue
-        if phase in {"qc", "downstream"} and not _hint_match(name, hints):
+        if phase in {"qc", "cluster", "downstream", "annotate"} and not _hint_match(resolved, hints):
             continue
-        extra.append(name)
+        if resolved not in available:
+            continue
+        extra.append(resolved)
         if len(extra) >= max_extra:
             break
-    return wanted + extra
+    out: list[str] = []
+    for n in wanted + extra:
+        if n not in out:
+            out.append(n)
+    return out
 
 
 SKILLS_ROOT = REPO_ROOT / "skills"

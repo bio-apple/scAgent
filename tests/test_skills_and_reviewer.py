@@ -1,69 +1,78 @@
 from agents.planner import choose_integrator
 from agents.reviewer import audit_code, audit_execution, format_review_card, publication_review
-from agents.templates import LOCKED_START, cluster_annotate_script, qc_preprocess_script, scanpy_script
+from agents.templates import LOCKED_START, cluster_annotate_script, cluster_only_script, annotate_deg_script, qc_preprocess_script, scanpy_script
 from scagent.inspect_data import detect_platform, detect_species_from_genes, gene_composition, inspect_data
-from scagent.skills_loader import TASK_SKILLS, awesome_manifest, list_skills, recommend_skills, skill_catalog_text
+from scagent.skills_loader import CAPABILITY_SKILLS, LEGACY_SKILL_ALIASES, awesome_manifest, get_skill, list_skills, recommend_skills, skill_catalog_text
 
 
-def test_task_skills_present():
+def test_capability_skills_present():
     names = {s.name for s in list_skills()}
-    assert set(TASK_SKILLS) <= names
-    assert len(names) == 10
+    assert set(CAPABILITY_SKILLS) <= names
+    assert len(names) == 6
+
+
+def test_legacy_alias_resolves_to_capability():
+    skill = get_skill("qc_preprocessing")
+    assert skill is not None
+    assert skill.name == "seurat-workflow"
 
 
 def test_recommend_core_and_batch():
     skills = recommend_skills({"n_samples": 4, "need_batch_correction": True, "tissue": "pbmc"})
-    assert "qc_preprocessing" in skills
-    assert "clustering_embedding" in skills
-    assert "cell_annotation" in skills
-    assert "integration_batch" in skills
+    assert "seurat-workflow" in skills
+    assert "cell-annotation" in skills
 
 
 def test_recommend_cellchat_task():
     skills = recommend_skills({"tissue": "tumor", "task": "CellChat 分析肿瘤与 T 细胞的配体受体通讯"})
-    assert "cell_communication" in skills
-    assert "qc_preprocessing" in skills
+    assert "cell-communication" in skills
+    assert "seurat-workflow" in skills
 
 
 def test_recommend_trajectory_and_deg():
     traj = recommend_skills({"task": "Monocle3 pseudotime trajectory", "tissue": "embryo"})
     assert "trajectory" in traj
     deg = recommend_skills({"task": "pseudobulk DEG and GSEA pathways", "route": ["deg", "gsea"]})
-    assert "deg_pathway" in deg
+    assert "differential-expression" in deg
 
 
-def test_skill_catalog_lists_task_skills():
+def test_skill_catalog_lists_capabilities():
     text = skill_catalog_text(limit=None)
-    for name in TASK_SKILLS:
+    for name in CAPABILITY_SKILLS:
         assert name in text
-    assert "one skill = one research task" in text
+    assert "capability skills" in text
 
 
 def test_skills_for_phase_qc_and_downstream():
     from scagent.skills_loader import skills_for_phase
 
-    qc = skills_for_phase("qc", ["cell_communication", "qc_preprocessing", "integration_batch"])
-    assert "qc_preprocessing" in qc
-    assert "dataset_loader" in qc
-    assert "cell_communication" not in qc
+    qc = skills_for_phase("qc", ["cell-communication", "qc_preprocessing", "integration_batch"])
+    assert "seurat-workflow" in qc
+    assert "cell-communication" not in qc
 
     down = skills_for_phase(
         "downstream",
-        ["cell_communication", "trajectory", "qc_preprocessing", "clustering_embedding"],
+        ["cell-communication", "trajectory", "qc_preprocessing", "clustering_embedding"],
     )
-    assert "clustering_embedding" in down
-    assert "cell_communication" in down
+    assert "seurat-workflow" in down
+    assert "cell-communication" in down
     assert "trajectory" in down
+
+
+def test_split_downstream_templates_compile():
+    meta = {"data_path": "x.h5ad", "tissue": "pbmc", "species": "human"}
+    qc = {"nmads": 5}
+    plan = {"integrator": None}
+    compile(cluster_only_script(meta, qc, plan), "<cluster>", "exec")
+    compile(annotate_deg_script(meta, qc, plan), "<annotate>", "exec")
 
 
 def test_awesome_manifest_optional():
     manifest = awesome_manifest()
-    # Manifest may lag; discovery is the source of truth.
-    assert len(list_skills()) == 10
+    assert len(list_skills()) == 6
     if manifest is not None:
-        assert manifest.get("active_skills") in {None, 10} or manifest.get("product_focus") == "scRNA-seq-tasks"
-
-
+        assert manifest.get("active_skills") == 6
+        assert manifest.get("product_focus") == "scRNA-capability-skills"
 def test_choose_integrator():
     assert choose_integrator({"n_samples": 1, "need_batch_correction": False}) is None
     assert choose_integrator({"n_samples": 3, "n_cells": 8000, "need_batch_correction": True}) == "harmony"

@@ -1,6 +1,7 @@
 ---
-name: cell_communication
-description: "Ligand–receptor / CellChat or CellPhoneDB analysis on annotated cell types."
+name: cell-communication
+description: "Ligand-receptor inference (CellChat R-first). Requires annotated cell types."
+capability: true
 ---
 
 # Scientific task: Cell–cell communication

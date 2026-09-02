@@ -53,7 +53,8 @@ def test_schema_requires_annotate_before_pseudobulk():
     assert any("annotate" in (iss or "").lower() or "pseudobulk" in (iss or "").lower() for iss in r["issues"])
 
 
-def test_confounded_batch_skips_integration_skill():
+def test_confounded_batch_still_gets_core_workflow():
+    """Integration is gated at runtime when batch×condition confounded; core workflow skill stays."""
     skills = recommend_skills(
         {
             "n_samples": 4,
@@ -62,8 +63,9 @@ def test_confounded_batch_skips_integration_skill():
             "tissue": "pbmc",
         }
     )
-    assert "integration_batch" not in skills
+    assert "seurat-workflow" in skills
+    assert "cell-annotation" in skills
     skills2 = recommend_skills(
         {"n_samples": 4, "need_batch_correction": True, "tissue": "pbmc"}
     )
-    assert "integration_batch" in skills2
+    assert "seurat-workflow" in skills2

@@ -714,8 +714,10 @@ def qc_preprocess_script(meta: dict, qc: dict) -> str:
     )
 
 
-def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> str:
+def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None, *, phase: str = "full") -> str:
+    """Phase: full | cluster | annotate. cluster=Leiden+markers; annotate=CellTypist+fusion+DE."""
     plan = plan or {}
+    phase = str(phase or "full").lower()
     p = analysis_params()
     sample_key = repr(meta.get("sample_key") or "sample")
     tissue = meta.get("tissue") or "default"
@@ -1181,6 +1183,7 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         return "\n".join(pad + ln if ln.strip() else ln for ln in text.splitlines())
 
     sk = sample_key  # already repr
+    typist_py = _celltypist_block(ct_model).strip() if phase in {"full", "annotate"} else ""
     python_path = "\n".join(
         [
             "from scagent.inspect_data import detect_expression_layer",
@@ -1205,7 +1208,7 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
             "",
             _de_block(marker_method, deg_cv).strip(),
             "",
-            _celltypist_block(ct_model).strip(),
+            typist_py,
         ]
     )
     r_path = "\n".join(
@@ -1236,11 +1239,86 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         ]
     )
     # Python path first so AST line-order DAG sees pca/leiden/umap before R-branch rank_genes.
-    python_or_r = "if not _R_REF:\n" + _ind(python_path, 4) + "\nelse:\n" + _ind(r_path, 4)
+    if phase == "annotate":
+        python_or_r = 'print("SCAGENT_CLUSTER_SKIP: annotate phase loads after_cluster.h5ad")'
+    else:
+        python_or_r = "if not _R_REF:\n" + _ind(python_path, 4) + "\nelse:\n" + _ind(r_path, 4)
 
-    return (
-        tpl.replace("__ROUTER_DN__", _router_downstream_bootstrap(meta, plan or {}))
-        .replace("__PYTHON_OR_R__", python_or_r)
+    load_qc = dedent(
+        """\
+        qc_path = Path("adata_qc.h5ad")
+        if not qc_path.exists():
+            alt = Path(".cache") / "adata_qc.h5ad"
+            if alt.exists():
+                qc_path = alt
+            else:
+                raise FileNotFoundError("adata_qc.h5ad missing; run QC phase first")
+        adata = sc.read_h5ad(qc_path)
+        from scagent.reproducibility import summarize_adata
+        adata_in_summary = summarize_adata(adata, step="qc_checkpoint", path=str(qc_path))
+        """
+    )
+    load_cluster = dedent(
+        """\
+        cluster_path = Path("adata_cluster.h5ad")
+        if not cluster_path.exists():
+            alt = Path(".cache") / "after_cluster.h5ad"
+            if alt.exists():
+                cluster_path = alt
+            else:
+                raise FileNotFoundError("adata_cluster.h5ad / after_cluster.h5ad missing; run cluster phase first")
+        adata = sc.read_h5ad(cluster_path)
+        from scagent.reproducibility import summarize_adata
+        adata_in_summary = summarize_adata(adata, step="cluster_checkpoint", path=str(cluster_path))
+        chosen_resolution = float(adata.uns.get("leiden_resolution_selection", {}).get("chosen") or 0.6)
+        """
+    )
+    load_block = load_cluster if phase == "annotate" else load_qc
+
+    cluster_only_tail = dedent(
+        """\
+        cluster_metrics = {
+            "phase": "cluster",
+            "resolution": float(chosen_resolution),
+            "n_clusters": int(adata.obs["leiden"].nunique()),
+            "n_cells": int(adata.n_obs),
+            "integrator": __INTEGRATOR__,
+            "seed": SEED,
+            "leiden_resolution_selection": adata.uns.get("leiden_resolution_selection"),
+            "adata_out": summarize_adata(adata, step="cluster_output"),
+        }
+        print("SCAGENT_METRICS:" + json.dumps(cluster_metrics))
+        Path("cluster_metrics.json").write_text(json.dumps(cluster_metrics, indent=2), encoding="utf-8")
+        adata.write("adata_cluster.h5ad")
+        if CACHE_ON:
+            Path(".cache").mkdir(exist_ok=True)
+            adata.write(".cache/after_cluster.h5ad")
+        print(adata)
+        """
+    )
+
+    annotate_start = "        MARKERS = __MARKERS__"
+    full_body = tpl.split(annotate_start, 1)
+    if phase == "cluster" and len(full_body) == 2:
+        tpl = full_body[0] + cluster_only_tail
+
+    qc_load_snippet = (
+        "        qc_path = Path(\"adata_qc.h5ad\")\n"
+        "        if not qc_path.exists():\n"
+        "            alt = Path(\".cache\") / \"adata_qc.h5ad\"\n"
+        "            if alt.exists():\n"
+        "                qc_path = alt\n"
+        "            else:\n"
+        "                raise FileNotFoundError(\"adata_qc.h5ad missing; run QC phase first\")\n"
+        "        adata = sc.read_h5ad(qc_path)\n"
+        "        from scagent.reproducibility import summarize_adata\n"
+        "        adata_in_summary = summarize_adata(adata, step=\"qc_checkpoint\", path=str(qc_path))"
+    )
+    out = tpl.replace("__ROUTER_DN__", _router_downstream_bootstrap(meta, plan or {}))
+    if phase == "annotate":
+        out = out.replace(qc_load_snippet, load_cluster.strip())
+    out = (
+        out.replace("__PYTHON_OR_R__", python_or_r)
         .replace("__PSEUDOBULK__", _pseudobulk_block(needs_pb, condition_key, sample_key, deg_engine, deg_cv, force_pb).strip("\n"))
         .replace("__SECOND_REF__", _second_ref_block().strip("\n"))
         .replace("__TRAJECTORY__", _trajectory_block(traj_mode).strip("\n"))
@@ -1254,9 +1332,17 @@ def cluster_annotate_script(meta: dict, qc: dict, plan: dict | None = None) -> s
         .replace("__N_PCS__", str(n_pcs))
         .replace("__N_JOBS__", str(int(perf["n_jobs"])))
         .replace("__CACHE_ON__", "True" if perf["cache"] else "False")
-        # Must be last: second_ref / integ_metrics inject __SAMPLE_KEY__.
         .replace("__SAMPLE_KEY__", sample_key)
     )
+    return out
+
+
+def cluster_only_script(meta: dict, qc: dict, plan: dict | None = None) -> str:
+    return cluster_annotate_script(meta, qc, plan, phase="cluster")
+
+
+def annotate_deg_script(meta: dict, qc: dict, plan: dict | None = None) -> str:
+    return cluster_annotate_script(meta, qc, plan, phase="annotate")
 
 
 def scanpy_script(meta: dict, qc: dict, plan: dict | None = None) -> str:

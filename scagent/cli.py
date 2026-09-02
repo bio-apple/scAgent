@@ -417,7 +417,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print("provenance: outputs/memory.yaml")
     print("notebook: outputs/analysis.ipynb （R 路径为 outputs/analysis.Rmd）")
     print("viewer: outputs/viewer.html （Plotly 框选细胞；scagent view --serve 可当场提问）")
-    print("脚本: workspace/qc_preprocess.py  workspace/cluster_annotate.py  workspace/reproducible_script.py")
+    print("脚本: workspace/qc_preprocess.py  workspace/cluster_only.py  workspace/annotate_deg.py  workspace/cluster_annotate.py  workspace/reproducible_script.py")
     if state.get("status") == "awaiting_mt_confirmation":
         print("线粒体阈值待确认。打开 outputs/decisions/mt.html")
         print("继续: scagent confirm mt recommended|lenient|strict")

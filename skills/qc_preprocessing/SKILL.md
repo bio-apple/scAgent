@@ -1,6 +1,8 @@
 ---
 name: qc_preprocessing
-description: "Tissue-aware QC, doublet/ambient handling, normalize, HVG, scale — required before clustering."
+description: "DEPRECATED → use seurat-workflow. Tissue-aware QC, doublet/ambient, normalize, HVG."
+deprecated: true
+replaced_by: seurat-workflow
 ---
 
 # Scientific task: QC & preprocessing

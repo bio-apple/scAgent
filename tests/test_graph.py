@@ -70,7 +70,7 @@ def test_end_to_end_without_llm(tmp_path):
         execute_code=False,
         checkpointer=MemorySaver(),
     )
-    assert "qc_preprocessing" in (state.get("skills_used") or [])
+    assert "seurat-workflow" in (state.get("skills_used") or [])
     assert (state.get("plan") or {}).get("loop") == "plan-and-solve"
     assert (state.get("plan") or {}).get("collaboration") == "multi-agent"
     assert {a["id"] for a in (state.get("plan") or {}).get("agents") or []} >= {"qc_preprocess", "cluster_deg", "bio_interpret", "code_audit"}
@@ -95,6 +95,9 @@ def test_end_to_end_without_llm(tmp_path):
     assert state["annotation_plan"]["dual_validation"] is True
     assert "未执行" in state["report"] or "Not executed" in state["report"]
     assert Path("workspace/qc_preprocess.py").exists()
+    assert Path("workspace/cluster_only.py").exists()
+    assert Path("workspace/annotate_deg.py").exists()
+    assert Path("workspace/cluster_annotate.py").exists()
     assert Path("workspace/run_manifest.json").exists()
     mem = state.get("analysis_memory") or {}
     assert mem.get("qc", {}).get("method") == "mad"

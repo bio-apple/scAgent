@@ -1,6 +1,8 @@
 ---
 name: visualization
-description: "Publication-style figures: UMAP, Feature/Violin/Dot/Heatmap; PDF+PNG @ 300 dpi."
+description: "DEPRECATED → use seurat-workflow. UMAP/violin/dot plots."
+deprecated: true
+replaced_by: seurat-workflow
 ---
 
 # Scientific task: Visualization

@@ -1,6 +1,8 @@
 ---
 name: clustering_embedding
-description: "PCA → neighbors → Leiden/Louvain clusters → UMAP embedding and cluster stats."
+description: "DEPRECATED → use seurat-workflow. PCA, Leiden, UMAP."
+deprecated: true
+replaced_by: seurat-workflow
 ---
 
 # Scientific task: Clustering & embedding

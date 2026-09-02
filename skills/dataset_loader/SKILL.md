@@ -1,6 +1,8 @@
 ---
 name: dataset_loader
-description: "Load 10x/Cell Ranger, H5, H5AD, Loom, or Seurat RDS into AnnData/Seurat; detect species and gene symbols."
+description: "DEPRECATED → use seurat-workflow. Load 10x/h5ad/loom/RDS."
+deprecated: true
+replaced_by: seurat-workflow
 ---
 
 # Scientific task: Dataset loading
